@@ -259,3 +259,52 @@ Delete the two WU-4 files to remove this unit cleanly: `src/channel.ts`, `test/c
 1. **Random suffix appended to the name.** Session dirs are `pi-tps-<pid>-<ts>-<randomBytes(4).hex>`, not the bare `pi-tps-<pid>-<ts>`, to satisfy the spec's "unique and unpredictable" requirement even for two same-millisecond creations; it still matches the `pi-tps-*` scavenger glob.
 2. **Owner marker written `0600` on POSIX** (dir `0700`), consistent with the snapshot privacy posture despite the design only mandating `0600` for snapshots.
 3. **`WriteResult = "ok" | "retry" | "failed"`.** EBUSY/EPERM is a distinct `"retry"` so `ThrottledPublisher` retries on the next 160 ms tick without an unbounded retry loop on hard failures (ENOSPC/permission → `"failed"` drops the packet silently).
+
+## Work Unit 5 — IPC Guard: Schema Validation, Eviction, Scavenger & Safe Aggregation (tasks 5.1–5.4)
+
+### Status
+
+- Change: `live-tps-meter`; phase: `sdd-apply`; unit: **WU-5 complete** (tasks 5.1–5.4 all `- [x]` in `tasks.md`).
+- `src/channel-guard.ts` and `test/channel-guard.test.ts` authored; `npm test` GREEN at **94/94** (baseline was 72).
+- Implementation tasks overall: 20/41 complete (WU-1 4 + WU-2 4 + WU-3 4 + WU-4 4 + WU-5 4).
+- Strict TDD followed (RED → GREEN → TRIANGULATE → REFACTOR) with `npm test` (Node 24 built-in `node --test`, native type stripping).
+
+### TDD Cycle Evidence
+
+Baseline before WU-5: 72 tests.
+
+**RED (5.1)** — `npm test`: `test/channel-guard.test.ts` authored first (18 tests across `validateWorkerSnapshot`, validated aggregation, dead/stale/completed eviction, scavenger, cleanup). The whole file fails to resolve the not-yet-written module: `Error [ERR_MODULE_NOT_FOUND]: Cannot find module '…/src/channel-guard.ts' imported from '…/test/channel-guard.test.ts'`. Result: `tests 73 / pass 72 / fail 1` (single `✖ test/channel-guard.test.ts`).
+
+**GREEN (5.2)** — implemented `src/channel-guard.ts`. `npm test` → `tests 90 / pass 90 / fail 0` (72 + 18 new).
+
+**TRIANGULATE (5.3)** — added privacy/torn-write/concurrent-read/foreign-scavenger tests: a contaminated packet drops `prompt`/`task`/`output`/`message` fields and never serializes the planted secret; truncated JSON (`…"phase":"str`) is skipped but not deleted; 25 interleaved atomic replace+read cycles never observe a torn payload (only full tps 1 or 99); six realistic foreign temp dirs (`systemd-private-*`, `npm-cache-*`, chrome, `.config`, plus `pi-tps-*` markerless/foreign-owner) are all preserved. `npm test` → `tests 94 / pass 94 / fail 0`.
+
+**REFACTOR (5.4)** — extracted the per-file read→skip/evict/keep decision into `readWorkerFile` (returning a `FileRead` union) so `readWorkerSnapshots` only handles the aggregation loop; no behavior change. `npm test` → `tests 94 / pass 94 / fail 0`.
+
+### Focused Test Command & Runtime Harness
+
+- Focused: `node --test "test/channel-guard.test.ts"` → `tests 22 / pass 22 / fail 0`.
+- Runtime harness (eviction/scavenge under fixtures): tests build `fs.mkdtempSync(join(os.tmpdir(), "tps-guard-"))` bases registered for `t.after` recursive removal; validation is pure, while dead/stale/completed eviction, the startup scavenger, and `removeSessionDirectory` operate on real `pi-tps-*`/foreign fixture dirs with injected `kill` and `now` clocks (no live process is ever signaled). `SCAVENGE_AGE_MS`, `STALENESS_MS` and `OWNER_FILENAME`/`DIR_PREFIX` are imported constants.
+
+### Files Changed (WU-5)
+
+- `src/channel-guard.ts` (new, 319 lines): `validateWorkerSnapshot` (whitelisted fresh object; rejects null/array/non-object, wrong `v`, invalid pid/workerId/timestamps/phase/counters; clamps+sanitizes optional strings; drops unknown fields; never throws), `isPidAlive` (only `ESRCH` = dead), validated `readWorkerSnapshots` (validation-before-aggregation, dead/stale/completed eviction, skip-not-delete for malformed files, sorted by pid), `scavengeStaleDirectories` (only valid `.owner` + dead pid + `> SCAVENGE_AGE_MS`), and `removeSessionDirectory` (refuses non-`pi-tps-*` basenames). All failures degrade silently, no throw escapes.
+- `test/channel-guard.test.ts` (new, 501 lines): 22 tests.
+- `openspec/changes/live-tps-meter/tasks.md` (checkboxes 5.1–5.4 → `- [x]`).
+- `openspec/changes/live-tps-meter/apply-progress.md` (this section).
+
+### Budget
+
+- Authored lines: `src/channel-guard.ts` **319** + `test/channel-guard.test.ts` **501** = **820 changed lines** (new files, `git diff --numstat`).
+- Within the maintainer-authorized **900-line WU-4–WU-9 ceiling** (no `size:exception` needed). Product-only count (`src/channel-guard.ts`) is 319 lines.
+
+### Rollback Boundary
+
+Delete the two WU-5 files to remove this unit cleanly: `src/channel-guard.ts`, `test/channel-guard.test.ts`. The WU-4 publisher (`src/channel.ts`, `test/channel.test.ts`) is intact and unaffected; no later unit imports `channel-guard.ts` yet (WU-8 `extensions/index.ts` will be its first consumer).
+
+### Deviations from Design
+
+1. **Oversized optional strings are clamped/sanitized, not rejected.** Design §3 rule 8 says optional strings are "clamped to safe lengths (≤ 64 chars) and sanitized"; the task 5.1 summary loosely groups them under "rejects". Implemented per the explicit rule 8: strings are sanitized (`sanitizeText`) and clamped to 64, while a present-but-non-string optional field is rejected. `workerId` remains a hard ≤128 reject (rule 4).
+2. **`completedAt`, when present, must be a finite positive number.** Design §3 only validates `startTime`/`updatedAt`; I applied the same positive-timestamp rule to `completedAt` for consistency and rejected invalid values rather than emitting them.
+3. **Scavenger age measured from `.owner.created`, not directory mtime.** Using the marker's own creation timestamp is immune to `touch`/atime churn and satisfies "positively match the package's ownership marker and schema"; the `.owner` must also carry `v === 1` (schema) to be considered.
+4. **`removeSessionDirectory` requires a `pi-tps-*` basename.** This is the ownership boundary that prevents an accidental non-package path from ever being recursively deleted; it does not require a `.owner` marker (the parent owns its directory by name even if the marker readback fails).
