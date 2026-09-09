@@ -1,0 +1,73 @@
+schema: spec-driven
+
+context: |
+  Greenfield public npm package for the Pi coding agent (workspace: tps-gentle-pi).
+  A live throughput (tokens-per-second) meter extension inspired by omp-throughput@1.0.1
+  (MIT, kajeagentspi), but designed primarily for gentle-pi: the MVP MUST show live TPS
+  for the main agent AND for gentle-pi subagents.
+
+  Central technical constraint (drives all design): gentle-pi subagents are NOT in-process.
+  Gentle Agents (gentle-pi/extensions/gentle-agents.ts + lib/agents-runner.ts) launches each
+  subagent as an isolated `pi --mode rpc` child OS process. omp-throughput's shared
+  `globalThis[Symbol.for(...)]` registry therefore cannot carry subagent metrics; a
+  cross-process observation strategy is required (candidates: extension loaded inside each
+  child publishing metrics over file/IPC, or parent-side sampling of the AgentRunner task
+  store/transcripts). Vanilla pi main-agent TPS (gauge, sparkline, mean μ, p95 via P² sketch)
+  must keep working with zero configuration, as in omp-throughput.
+
+  Stack (decided, not implemented): single TypeScript extension, no build step (pi loads
+  .ts directly via Bun; tests run on Node 24.20.0 native TypeScript type-stripping,
+  verified working). Runtime is Node/npm only — Node v24.20.0, npm 11.12.1.
+
+  Distribution target: public npm and the pi.dev package gallery (requires the
+  `pi-package` keyword, a `pi` manifest with `./extensions`, optional peerDependency
+  `@earendil-works/pi-coding-agent >= 3.0.0`). Tentative npm name `tps-gentle-pi`
+  (verified available on npm; final name is a proposal-phase decision). All technical
+  artifacts in English.
+
+strict_tdd: true
+
+testing:
+  status: available
+  recommended_runner: node:test
+  recommended_libs: []
+  notes: |
+    Node 24's built-in `node --test` runner executes .ts test files natively
+    (type stripping verified in this workspace) — no framework install, no build
+    step, matching omp-throughput's zero-build philosophy. Test the extension by
+    mocking the ExtensionAPI/ExtensionContext surface (event emitters for
+    message_start/message_update/message_end, tool_call, session lifecycle) and
+    by writing pure functions for stats (P² sketch, ring buffer), row/header
+    rendering, and cross-process metric aggregation so they are unit-testable
+    without a live pi session. `npm test` should run `node --test` over the
+    package's test files.
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - State explicitly which extension events and gentle-pi surfaces (AgentRunner, task store, transcripts) are consumed
+    - Keep the MVP scope fixed: main-agent TPS + gentle-pi subagent TPS; defer anything else
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+    - Specify behavior on vanilla pi (subagent rows absent, main panel intact) as an explicit scenario
+  design:
+    - Document the cross-process metric collection architecture with rationale (child-side publisher vs parent-side observer)
+    - Confirm no build step is introduced; extension stays TypeScript loaded directly by pi
+    - Confirm zero disk I/O requirement or document any intentional exception (e.g. temp metric files) with cleanup semantics
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+    - Keep every task within the 400-changed-line review budget
+  apply:
+    guidelines:
+      - Follow omp-throughput's single-file, zero-config, in-memory style unless cross-process needs force a split
+      - Target the vanilla pi extension API (pi.on events, ctx.ui), never omp-only surfaces
+      - Keep rendering logic in pure, exported, testable functions
+    tdd: true
+    test_command: "npm test"
+  verify:
+    test_command: "npm test"
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
