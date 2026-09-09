@@ -1,0 +1,30 @@
+{
+  "name": "tps-gentle-pi",
+  "version": "0.1.0",
+  "description": "Live tokens-per-second (TPS) meter for Pi with gentle-pi subagent visibility",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "throughput",
+    "tokens-per-second",
+    "tps",
+    "meter"
+  ],
+  "pi": {
+    "extensions": "./extensions"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\""
+  }
+}
