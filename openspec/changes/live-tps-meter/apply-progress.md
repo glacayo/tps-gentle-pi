@@ -160,3 +160,52 @@ Remaining implementation-owned tasks are logical WU-3 → WU-9 plus final verifi
 - `chained-pr` (`/home/glacayom/.config/opencode/skills/chained-pr/SKILL.md`)
 
 `skill_resolution`: paths-injected (parent-provided exact paths read before work).
+
+## Work Unit 3 — Responsive Panel Composition & Width Safety (tasks 3.1–3.4)
+
+### Status
+
+- Change: `live-tps-meter`; phase: `sdd-apply`; unit: **WU-3 complete** (tasks 3.1–3.4 all `- [x]` in `tasks.md`).
+- `src/render.ts` and `test/render.test.ts` authored; `npm test` GREEN at 58/58.
+- Implementation tasks overall: 12/41 complete (WU-1 4 + WU-2 4 + WU-3 4).
+- Strict TDD followed (RED → GREEN → TRIANGULATE → REFACTOR) with `npm test` (Node 24 built-in `node --test`, native type stripping).
+
+### TDD Cycle Evidence
+
+Baseline before WU-3: 43 tests (WU-1 + WU-2).
+
+**RED (3.1)** — `npm test`: `test/render.test.ts` authored first; 11 tests fail to resolve the not-yet-written module. `✖ test/render.test.ts`, `ERR_MODULE_NOT_FOUND … url: 'file://…/src/render.ts'`. Result: `tests 44 / pass 43 / fail 1`.
+
+**GREEN (3.2)** — implemented `src/render.ts`; first run exposed a missing `formatSparkline` import (`ReferenceError: formatSparkline is not defined`), fixed by adding it to the `./graphics.ts` import. Final `npm test`: `tests 54 / pass 54 / fail 0`.
+
+**TRIANGULATE (3.3)** — added determinism/width-adversarial tests (byte-identical at 60/80/120/160; maximally long sanitized labels clamp ≤ 60; zero-worker renders one line; 12-worker render fits). `npm test`: `tests 58 / pass 58 / fail 0`.
+
+**REFACTOR (3.4)** — extracted `workerName` (removed nested ternary), hoisted `bp`/`cells` locals and consolidated `theme` handling; behavior preserved. A refactor intermediate (`dim` receiving `undefined` theme) was caught by the suite (`TypeError: Cannot read properties of undefined (reading 'dim')`) and fixed with `theme?.dim`; final `npm test`: `tests 58 / pass 58 / fail 0`.
+
+### Budget Overage — size:exception recommendation
+
+- Authored lines: `src/render.ts` **235** + `test/render.test.ts` **219** = **454 changed lines** (new files, `git diff --numstat`).
+- Exceeds the 400-line budget by **54 lines** and the ≤~390 re-sliced ceiling, despite one honest reduction pass (478 → 454).
+- Cannot shrink further without deleting mandated coverage (15 tests across the four TDD phases) or removing public-API/edge-case documentation — both forbidden by the work-unit-commits skill.
+- **Recommendation:** a 54-line `size:exception` for WU-3, OR a human-decision re-slice. The parent prompt pre-declined `size:exception` (`no exception`); this finding is surfaced for the maintainer rather than silently code-golfed.
+
+### Files Changed (WU-3)
+
+- `src/render.ts` (new): pure layout composer `renderMainRow` / `renderSubagentRow` / `renderPanel`, `breakpointFor`, breakpoint constants, `PanelStats`/`WorkerRow`/`PanelTheme` types. Consumes WU-2 `formatGauge`/`formatSparkline`/`formatRate`/`formatTokens`/`sanitizeText`/`stripAnsi`; no ambient state, no I/O.
+- `test/render.test.ts` (new): 15 tests (breakpoints, main row, tool-phase variant, badge/fallback, documented field hiding, width safety 60/80/120/160, determinism, long-label clamp, zero/many workers).
+- `openspec/changes/live-tps-meter/tasks.md` (checkboxes 3.1–3.4 → `- [x]`).
+- `openspec/changes/live-tps-meter/apply-progress.md` (this section).
+
+### Runtime Harness Status
+
+- `N/A` — pure panel composition, no runtime boundary. `src/render.ts` performs no I/O and no Pi/process interaction; exercised entirely via `node --test`.
+
+### Rollback Boundary
+
+Delete the two WU-3 files to remove this unit cleanly: `src/render.ts`, `test/render.test.ts`. WU-1/WU-2 primitives are unaffected (no later unit imports `render.ts` yet).
+
+### Deviations from Design
+
+1. **Gauge rendered without surrounding brackets.** Design §5's illustrative `[■■■■■■■■········]` is drawn as the bare 16/8-cell bar, consistent with WU-2's `formatGauge` contract (no bracket wrapping).
+2. **Single uniform two-space field separator.** Design examples use variable whitespace; a fixed `"  "` separator keeps width accounting deterministic and testable.
+3. **Model labels are dimmed; badges are not.** Dim color applies to `(model)` only, matching the design's "model in dim text" while keeping correlated badges plain.

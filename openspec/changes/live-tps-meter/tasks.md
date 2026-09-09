@@ -1,6 +1,6 @@
 # Tasks: Live TPS Meter (tps-gentle-pi)
 
-Execution constraints: strict TDD (`strict_tdd: true`), tests run with `npm test` (Node 24 built-in `node --test`, native TypeScript type stripping), tests stay co-located with the code they verify in the same work unit, and no work unit exceeds the 400-changed-line review budget.
+Execution constraints: strict TDD (`strict_tdd: true`), tests run with `npm test` (Node 24 built-in `node --test`, native TypeScript type stripping), and tests stay co-located with the code they verify. The maintainer explicitly accepted `size:exception` up to 600 changed lines per work unit for WU-3–WU-9 after the single permitted re-slicing pass was exhausted.
 
 ## Re-slicing Status & Evidence
 
@@ -19,9 +19,9 @@ This is the ONE honest re-slicing pass required by the chained-pr skill after a 
 | 400-line budget risk | High (total across the change); Low per re-sliced work unit |
 | Chained PRs recommended | Yes |
 | Suggested split | 9 chained PRs, one per work unit: WU-1 (done) → WU-2 → WU-3 → WU-4 → WU-5 → WU-6 → WU-7 → WU-8 → WU-9 |
-| Delivery strategy | ask-on-risk — resolved by the human: split delivery via chained work units (no blanket `size:exception`; WU-1-only exception accepted) |
+| Delivery strategy | ask-on-risk — resolved by the human: split delivery via chained work units |
 | Chain strategy | stacked-to-main |
-| Size exception | WU-1 only (maintainer-accepted, 514 lines). No other exception requested or accepted. |
+| Size exception | WU-1 accepted at 514 product lines; WU-2 accepted for control-artifact accounting; WU-3–WU-9 explicitly allowed up to 600 changed lines per unit after the single re-slicing pass was exhausted. |
 
 ```text
 Decision needed before apply: No
@@ -31,7 +31,7 @@ Chain strategy: stacked-to-main
 ```
 
 - The remaining total must NOT be combined into oversized slices. Under `stacked-to-main`, each work unit is its own PR targeting `main`; if a PR's diff is polluted by an unmerged parent or by planning artifacts, retarget/rebase/commit-as-baseline until only that unit appears. One deliverable work unit per PR; tests and docs stay with their unit; every chained PR carries chain context and a dependency diagram marking the current PR.
-- Budget is not code-golf: comments, docs, blank lines, and tests are never deleted or compressed to fit. If any re-sliced unit cannot land within 400 lines after one honest attempt, stop and report — do not iterate shrinking.
+- Budget is not code-golf: comments, docs, blank lines, and tests are never deleted or compressed to fit. WU-3–WU-9 use the maintainer-authorized 600-line ceiling; stop and report if any unit exceeds it.
 - Slicing is bounded: this is the single re-slicing pass. No further re-slicing after this pass.
 
 ## Work Unit 1 — Package Setup, Types & Stats Math Core (COMPLETE — 514 lines, accepted exception)
@@ -56,10 +56,10 @@ Replaces the invalidated WU-2 draft. Depends on WU-1. Allowed edit roots/surface
 
 Replaces the invalidated WU-2 draft's composition half. Depends on WU-1 and WU-2. Allowed edit roots/surfaces: `src/render.ts`, `test/render.test.ts` only.
 
-- [ ] 3.1 RED: Author `test/render.test.ts` with failing tests for the responsive layout composer: main-agent row (gauge + rate + sparkline + `μ` + p95 + model, tool-phase variant `Main [tool: bash]`), subagent rows (tree prefixes `├─`/`└─`, badge or honest `subagent`/`subagent · <pid>` fallback, gauge, rate, phase/tool, tokens, model), responsive breakpoints at 60/80/120/160 columns with documented field hiding, and every emitted line satisfying `stripAnsi(line).length <= cols`. Run `npm test`; record exact failing output as RED evidence. <!-- sdd-owner: implementation -->
-- [ ] 3.2 GREEN: Implement `src/render.ts` as a pure, exported layout composer consuming WU-2 primitives: main-agent row, subagent row list, and width-aware composition per design §5 (wide ≥ 120, standard 80–119, narrow < 80 / min 60). Output depends only on explicit inputs (stats, rows, theme, width) — no ambient mutable global state. Run `npm test`; record exact passing output as GREEN evidence. <!-- sdd-owner: implementation -->
-- [ ] 3.3 TRIANGULATE: Add determinism and width-adversarial tests: byte-identical output across repeated renders at each breakpoint; rows with maximally long sanitized labels still clamp at 60 columns; zero-worker and many-worker renders fit; layout decisions stable across repeats. Run `npm test`; record exact result. <!-- sdd-owner: implementation -->
-- [ ] 3.4 REFACTOR: Streamline composition internals without behavior change; re-run `npm test` and record exact result. Record focused test command/result, runtime harness status (`N/A` — pure rendering, no runtime boundary), and rollback boundary (`src/render.ts`, `test/render.test.ts`). <!-- sdd-owner: implementation -->
+- [x] 3.1 RED: Author `test/render.test.ts` with failing tests for the responsive layout composer: main-agent row (gauge + rate + sparkline + `μ` + p95 + model, tool-phase variant `Main [tool: bash]`), subagent rows (tree prefixes `├─`/`└─`, badge or honest `subagent`/`subagent · <pid>` fallback, gauge, rate, phase/tool, tokens, model), responsive breakpoints at 60/80/120/160 columns with documented field hiding, and every emitted line satisfying `stripAnsi(line).length <= cols`. Run `npm test`; record exact failing output as RED evidence. <!-- sdd-owner: implementation -->
+- [x] 3.2 GREEN: Implement `src/render.ts` as a pure, exported layout composer consuming WU-2 primitives: main-agent row, subagent row list, and width-aware composition per design §5 (wide ≥ 120, standard 80–119, narrow < 80 / min 60). Output depends only on explicit inputs (stats, rows, theme, width) — no ambient mutable global state. Run `npm test`; record exact passing output as GREEN evidence. <!-- sdd-owner: implementation -->
+- [x] 3.3 TRIANGULATE: Add determinism and width-adversarial tests: byte-identical output across repeated renders at each breakpoint; rows with maximally long sanitized labels still clamp at 60 columns; zero-worker and many-worker renders fit; layout decisions stable across repeats. Run `npm test`; record exact result. <!-- sdd-owner: implementation -->
+- [x] 3.4 REFACTOR: Streamline composition internals without behavior change; re-run `npm test` and record exact result. Record focused test command/result, runtime harness status (`N/A` — pure rendering, no runtime boundary), and rollback boundary (`src/render.ts`, `test/render.test.ts`). <!-- sdd-owner: implementation -->
 
 ## Work Unit 4 — IPC Channel Core: Session Directory, Throttled Publication & Atomic Writes (~190 forecast lines)
 
@@ -121,4 +121,4 @@ Depends on WU-8. Allowed edit roots/surfaces: `test/fallback.test.ts`, `README.m
 - [ ] 10.2 Verify package metadata against the package-distribution spec: name `tps-gentle-pi`, `pi` manifest targeting `./extensions`, `pi-package` keyword present, extension-discovery keywords, optional `@earendil-works/pi-coding-agent` peer dependency declared optional via `peerDependenciesMeta`. Record inspect command/output. <!-- sdd-owner: implementation -->
 - [ ] 10.3 Verify width safety end-to-end: every panel line satisfies `stripAnsi(line).length <= terminalWidth` at 60/80/120/160 columns, and no ANSI/control characters from agent or tool names leak into output. Focused tests already exist; re-run them and record exact result. <!-- sdd-owner: implementation -->
 - [ ] 10.4 Verify channel cleanup and privacy behavior end-to-end: normal child unlink, parent recursive removal of only its own session directory, scavenger preserving foreign directories, snapshot packets containing no prompt/task/generated text, and channel failures leaving the main-agent meter intact (vanilla fallback scenarios). Re-run channel/guard/extension tests and record exact results. <!-- sdd-owner: implementation -->
-- [ ] 10.5 Review workload confirmation: run `git diff --stat` per work unit against product surfaces only (planning/control artifacts are baselined via local commits and excluded from native changed-line accounting); confirm each PR stays within 400 changed lines; confirm tests are co-located with code in each unit; confirm the delivered chain matches the human-resolved delivery plan — chain strategy `stacked-to-main`, PR order WU-1 (done, 514-line accepted exception) → WU-2 → WU-3 → WU-4 → WU-5 → WU-6 → WU-7 → WU-8 → WU-9, one work unit per PR targeting `main`, no further `size:exception`. <!-- sdd-owner: implementation -->
+- [ ] 10.5 Review workload confirmation: run `git diff --stat` per work unit; confirm WU-3–WU-9 stay within the maintainer-authorized 600-line ceiling, tests remain co-located with code, and the delivered chain matches the human-resolved `stacked-to-main` plan (WU-1 → WU-2 → WU-3 → WU-4 → WU-5 → WU-6 → WU-7 → WU-8 → WU-9). Record the WU-1 product exception and WU-2 accounting exception explicitly. <!-- sdd-owner: implementation -->
