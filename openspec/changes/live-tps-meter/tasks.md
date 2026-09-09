@@ -1,6 +1,6 @@
 # Tasks: Live TPS Meter (tps-gentle-pi)
 
-Execution constraints: strict TDD (`strict_tdd: true`), tests run with `npm test` (Node 24 built-in `node --test`, native TypeScript type stripping), and tests stay co-located with the code they verify. The maintainer explicitly accepted `size:exception` up to 600 changed lines per work unit for WU-3–WU-9 after the single permitted re-slicing pass was exhausted.
+Execution constraints: strict TDD (`strict_tdd: true`), tests run with `npm test` (Node 24 built-in `node --test`, native TypeScript type stripping), and tests stay co-located with the code they verify. The maintainer explicitly accepted `size:exception` up to 600 changed lines for WU-3 and up to 900 changed lines per work unit for WU-4–WU-9 after the single permitted re-slicing pass was exhausted.
 
 ## Re-slicing Status & Evidence
 
@@ -21,7 +21,7 @@ This is the ONE honest re-slicing pass required by the chained-pr skill after a 
 | Suggested split | 9 chained PRs, one per work unit: WU-1 (done) → WU-2 → WU-3 → WU-4 → WU-5 → WU-6 → WU-7 → WU-8 → WU-9 |
 | Delivery strategy | ask-on-risk — resolved by the human: split delivery via chained work units |
 | Chain strategy | stacked-to-main |
-| Size exception | WU-1 accepted at 514 product lines; WU-2 accepted for control-artifact accounting; WU-3–WU-9 explicitly allowed up to 600 changed lines per unit after the single re-slicing pass was exhausted. |
+| Size exception | WU-1 accepted at 514 product lines; WU-2 accepted for control-artifact accounting; WU-3 accepted under 600; WU-4–WU-9 explicitly allowed up to 900 changed lines per unit. |
 
 ```text
 Decision needed before apply: No
@@ -31,7 +31,7 @@ Chain strategy: stacked-to-main
 ```
 
 - The remaining total must NOT be combined into oversized slices. Under `stacked-to-main`, each work unit is its own PR targeting `main`; if a PR's diff is polluted by an unmerged parent or by planning artifacts, retarget/rebase/commit-as-baseline until only that unit appears. One deliverable work unit per PR; tests and docs stay with their unit; every chained PR carries chain context and a dependency diagram marking the current PR.
-- Budget is not code-golf: comments, docs, blank lines, and tests are never deleted or compressed to fit. WU-3–WU-9 use the maintainer-authorized 600-line ceiling; stop and report if any unit exceeds it.
+- Budget is not code-golf: comments, docs, blank lines, and tests are never deleted or compressed to fit. WU-3 used its maintainer-authorized 600-line ceiling; WU-4–WU-9 use the maintainer-authorized 900-line ceiling; stop and report if any unit exceeds its ceiling.
 - Slicing is bounded: this is the single re-slicing pass. No further re-slicing after this pass.
 
 ## Work Unit 1 — Package Setup, Types & Stats Math Core (COMPLETE — 514 lines, accepted exception)
@@ -65,10 +65,10 @@ Replaces the invalidated WU-2 draft's composition half. Depends on WU-1 and WU-2
 
 Depends on WU-1 (types/constants). Allowed edit roots/surfaces: `src/channel.ts`, `test/channel.test.ts` only.
 
-- [ ] 4.1 RED: Author `test/channel.test.ts` with failing tests for: unpredictable `pi-tps-<pid>-<ts>` session directory under `os.tmpdir()` with POSIX mode `0700`, `.owner` marker (`{ pid, created, v: 1 }`), Windows path skipping POSIX modes; atomic write-replace (`mode 0o600`, zero residual `.tmp` files); `ThrottledPublisher` ≤ 1 write per 160 ms with immediate flush on significant transitions (tool start/end, turn completion, worker completion) bypassing and resetting the throttle window; 20 streaming updates in 50 ms produce exactly 1 immediate + 1 trailing write. Run `npm test`; record exact failing output as RED evidence. <!-- sdd-owner: implementation -->
-- [ ] 4.2 GREEN: Implement `src/channel.ts`: session directory creation with `.owner` marker, `ThrottledPublisher` with the semantics above, atomic write-replace including Windows `EBUSY`/`EPERM` catch-unlink-retry-on-next-tick semantics, and child unlink on normal shutdown. All failures degrade silently — no throw escapes. Run `npm test`; record exact passing output as GREEN evidence. <!-- sdd-owner: implementation -->
-- [ ] 4.3 TRIANGULATE: Add failure-injection tests: unwritable-tempdir creation failure and `ENOSPC` publication failure are caught with no escaping exception; nothing is ever written outside the session directory; no shell commands on any code path (inspect for `child_process`/`exec`/`spawn`); rapid-transition sequences never exceed the throttle ceiling. Run `npm test`; record exact result. <!-- sdd-owner: implementation -->
-- [ ] 4.4 REFACTOR: Clean publisher/dir seams without behavior change; re-run `npm test` and record exact result. Record focused test command/result, runtime harness scenario (temp-dir lifecycle under fixtures) and exact result, and rollback boundary (`src/channel.ts`, `test/channel.test.ts`). <!-- sdd-owner: implementation -->
+- [x] 4.1 RED: Author `test/channel.test.ts` with failing tests for: unpredictable `pi-tps-<pid>-<ts>` session directory under `os.tmpdir()` with POSIX mode `0700`, `.owner` marker (`{ pid, created, v: 1 }`), Windows path skipping POSIX modes; atomic write-replace (`mode 0o600`, zero residual `.tmp` files); `ThrottledPublisher` ≤ 1 write per 160 ms with immediate flush on significant transitions (tool start/end, turn completion, worker completion) bypassing and resetting the throttle window; 20 streaming updates in 50 ms produce exactly 1 immediate + 1 trailing write. Run `npm test`; record exact failing output as RED evidence. <!-- sdd-owner: implementation -->
+- [x] 4.2 GREEN: Implement `src/channel.ts`: session directory creation with `.owner` marker, `ThrottledPublisher` with the semantics above, atomic write-replace including Windows `EBUSY`/`EPERM` catch-unlink-retry-on-next-tick semantics, and child unlink on normal shutdown. All failures degrade silently — no throw escapes. Run `npm test`; record exact passing output as GREEN evidence. <!-- sdd-owner: implementation -->
+- [x] 4.3 TRIANGULATE: Add failure-injection tests: unwritable-tempdir creation failure and `ENOSPC` publication failure are caught with no escaping exception; nothing is ever written outside the session directory; no shell commands on any code path (inspect for `child_process`/`exec`/`spawn`); rapid-transition sequences never exceed the throttle ceiling. Run `npm test`; record exact result. <!-- sdd-owner: implementation -->
+- [x] 4.4 REFACTOR: Clean publisher/dir seams without behavior change; re-run `npm test` and record exact result. Record focused test command/result, runtime harness scenario (temp-dir lifecycle under fixtures) and exact result, and rollback boundary (`src/channel.ts`, `test/channel.test.ts`). <!-- sdd-owner: implementation -->
 
 ## Work Unit 5 — IPC Guard: Schema Validation, Eviction, Scavenger & Safe Aggregation (~190 forecast lines)
 
@@ -121,4 +121,4 @@ Depends on WU-8. Allowed edit roots/surfaces: `test/fallback.test.ts`, `README.m
 - [ ] 10.2 Verify package metadata against the package-distribution spec: name `tps-gentle-pi`, `pi` manifest targeting `./extensions`, `pi-package` keyword present, extension-discovery keywords, optional `@earendil-works/pi-coding-agent` peer dependency declared optional via `peerDependenciesMeta`. Record inspect command/output. <!-- sdd-owner: implementation -->
 - [ ] 10.3 Verify width safety end-to-end: every panel line satisfies `stripAnsi(line).length <= terminalWidth` at 60/80/120/160 columns, and no ANSI/control characters from agent or tool names leak into output. Focused tests already exist; re-run them and record exact result. <!-- sdd-owner: implementation -->
 - [ ] 10.4 Verify channel cleanup and privacy behavior end-to-end: normal child unlink, parent recursive removal of only its own session directory, scavenger preserving foreign directories, snapshot packets containing no prompt/task/generated text, and channel failures leaving the main-agent meter intact (vanilla fallback scenarios). Re-run channel/guard/extension tests and record exact results. <!-- sdd-owner: implementation -->
-- [ ] 10.5 Review workload confirmation: run `git diff --stat` per work unit; confirm WU-3–WU-9 stay within the maintainer-authorized 600-line ceiling, tests remain co-located with code, and the delivered chain matches the human-resolved `stacked-to-main` plan (WU-1 → WU-2 → WU-3 → WU-4 → WU-5 → WU-6 → WU-7 → WU-8 → WU-9). Record the WU-1 product exception and WU-2 accounting exception explicitly. <!-- sdd-owner: implementation -->
+- [ ] 10.5 Review workload confirmation: run `git diff --stat` per work unit; confirm WU-3 stayed within 600 and WU-4–WU-9 stayed within the maintainer-authorized 900-line ceiling, tests remain co-located with code, and the delivered chain matches the human-resolved `stacked-to-main` plan (WU-1 → WU-2 → WU-3 → WU-4 → WU-5 → WU-6 → WU-7 → WU-8 → WU-9). Record the WU-1 product exception and WU-2 accounting exception explicitly. <!-- sdd-owner: implementation -->

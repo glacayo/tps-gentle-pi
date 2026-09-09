@@ -209,3 +209,53 @@ Delete the two WU-3 files to remove this unit cleanly: `src/render.ts`, `test/re
 1. **Gauge rendered without surrounding brackets.** Design §5's illustrative `[■■■■■■■■········]` is drawn as the bare 16/8-cell bar, consistent with WU-2's `formatGauge` contract (no bracket wrapping).
 2. **Single uniform two-space field separator.** Design examples use variable whitespace; a fixed `"  "` separator keeps width accounting deterministic and testable.
 3. **Model labels are dimmed; badges are not.** Dim color applies to `(model)` only, matching the design's "model in dim text" while keeping correlated badges plain.
+
+## Work Unit 4 — IPC Channel Core (tasks 4.1–4.4)
+
+### Status
+
+- Change: `live-tps-meter`; phase: `sdd-apply`; unit: **WU-4 complete** (tasks 4.1–4.4 all `- [x]` in `tasks.md`).
+- `src/channel.ts` and `test/channel.test.ts` authored; `npm test` GREEN at **72/72** (baseline was 58).
+- Implementation tasks overall: 16/41 complete (WU-1 4 + WU-2 4 + WU-3 4 + WU-4 4).
+- Strict TDD followed (RED → GREEN → TRIANGULATE → REFACTOR) with `npm test` (Node 24 built-in `node --test`, native type stripping).
+
+### TDD Cycle Evidence
+
+Baseline before WU-4: 58 tests.
+
+**RED (4.1)** — `npm test`: `test/channel.test.ts` authored first (9 failing tests across dir/owner/atomic/throttle/significant/shutdown/EBUSY). Fails to resolve the not-yet-written module: `ERR_MODULE_NOT_FOUND: Cannot find module '…/src/channel.ts' imported from '…/test/channel.test.ts'`. Result: `tests 59 / pass 58 / fail 1`.
+
+**GREEN (4.2)** — implemented `src/channel.ts`. `npm test` → `tests 67 / pass 67 / fail 0`.
+
+**TRIANGULATE (4.3)** — added failure-injection tests (unwritable tmp root → `null`; `ENOSPC` → `"failed"` no throw; every write/rename path confined to the session dir; no `child_process`/`exec`/`spawn` in source; rapid significant+streaming sequence = exactly 4 renames). `npm test` → `tests 72 / pass 72 / fail 0`.
+
+**REFACTOR (4.4)** — extracted `workerFileName(pid)` and computed `elapsed` once in `publish`; behavior unchanged. `npm test` → `tests 72 / pass 72 / fail 0`.
+
+### Focused Test Command & Runtime Harness
+
+- Focused: `node --test "test/channel.test.ts"` → `tests 14 / pass 14 / fail 0`.
+- Runtime harness (temp-dir lifecycle under fixtures): tests build `fs.mkdtempSync(join(os.tmpdir(), "tps-channel-"))` bases registered for `t.after` recursive removal; directory creation, atomic rename, throttled publication, unlink, and cleanup are real filesystem operations confined to those fixture dirs. EBUSY/EPERM retry and shutdown-timer cancellation use real timers (`await delay(THROTTLE_MS + 50)`).
+
+### Files Changed (WU-4)
+
+- `src/channel.ts` (new, 288 lines): `createSessionDirectory` (unpredictable `pi-tps-<pid>-<ts>-<rand>` dir, `.owner` marker `{pid, created, v:1}`, POSIX `0700` dir / `0600` owner, win32 skips modes), `writeSnapshotAtomic` (`0600` `.tmp` → `renameSync`, zero residual `.tmp`, win32 `EBUSY`/`EPERM` → `"retry"`), `unlinkWorkerSnapshot`, and `ThrottledPublisher` (≤1 write/160 ms, significant-transition immediate flush + window reset, `flush()`, `shutdown()` unlink + timer cancel). All failures degrade silently (`null` / `WriteResult`), no throw escapes.
+- `test/channel.test.ts` (new, 353 lines): 14 tests.
+- `openspec/changes/live-tps-meter/tasks.md` (checkboxes 4.1–4.4 → `- [x]`).
+- `openspec/changes/live-tps-meter/apply-progress.md` (this section).
+
+### Budget — size:exception recommendation
+
+- Authored lines: `src/channel.ts` **288** + `test/channel.test.ts` **353** = **641 changed lines** (new files, `git diff --numstat`).
+- Exceeds the maintainer-authorized 600-line WU-3–WU-9 ceiling by **41 lines**.
+- Cannot shrink honestly without deleting mandated coverage (the 13 production-behavior tests map 1:1 to tasks 4.1 and 4.3) or removing the defensive try/catch + documentation that implements "no throw escapes" — both forbidden under the no-code-golf rule. After one honest pass the unit remains a single cohesive deliverable and cannot be further sliced.
+- **Recommendation:** a 41-line `size:exception` for WU-4. Product-only count (`src/channel.ts`) is 288 lines, well under 600.
+
+### Rollback Boundary
+
+Delete the two WU-4 files to remove this unit cleanly: `src/channel.ts`, `test/channel.test.ts`. WU-1 (`src/types.ts`, `src/stats.ts`) is intact; no later unit imports `channel.ts` yet (WU-5 `channel-guard.ts` will depend on it).
+
+### Deviations from Design
+
+1. **Random suffix appended to the name.** Session dirs are `pi-tps-<pid>-<ts>-<randomBytes(4).hex>`, not the bare `pi-tps-<pid>-<ts>`, to satisfy the spec's "unique and unpredictable" requirement even for two same-millisecond creations; it still matches the `pi-tps-*` scavenger glob.
+2. **Owner marker written `0600` on POSIX** (dir `0700`), consistent with the snapshot privacy posture despite the design only mandating `0600` for snapshots.
+3. **`WriteResult = "ok" | "retry" | "failed"`.** EBUSY/EPERM is a distinct `"retry"` so `ThrottledPublisher` retries on the next 160 ms tick without an unbounded retry loop on hard failures (ENOSPC/permission → `"failed"` drops the packet silently).
