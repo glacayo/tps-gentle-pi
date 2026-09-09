@@ -363,3 +363,57 @@ Delete the two WU-6 files to remove this unit cleanly: `src/tracker.ts`, `test/t
 4. **Reported usage is retained monotonically.** `messageTokens = max(reportedTokens, estimateTokens(chars))` so a provider that reports usage and then omits it on later chunks can never regress the token count.
 5. **Live TPS is 0 on the first output delta.** The elapsed base starts at the first delta, so the first delta has zero elapsed and yields 0 by construction; the meter "moves" on the second and later deltas (this is the spec's "elapsed-time base starts at the first observed output delta").
 6. **Character estimate counts `thinking_delta` in addition to `text_delta`**, per `explore.md` §1 ("Filters for type text_delta or thinking_delta"), both accumulated into `messageChars`.
+
+## Work Unit 7 — Task Correlation Engine & Honest Fallback (tasks 7.1–7.4)
+
+### Status
+
+- Change: `live-tps-meter`; phase: `sdd-apply`; unit: **WU-7 complete** (tasks 7.1–7.4 all `- [x]` in `tasks.md`).
+- `src/correlation.ts` and `test/correlation.test.ts` authored; `npm test` GREEN at **131/131** (baseline was 113).
+- Implementation tasks overall: 28/41 complete (WU-1→WU-7 = 7×4). Only WU-7 surfaces touched; **no extension wiring** (WU-8 untouched).
+- Strict TDD followed (RED → GREEN → TRIANGULATE → REFACTOR) with `npm test` (Node 24 built-in `node --test`, native type stripping).
+
+### TDD Cycle Evidence
+
+Baseline before WU-7: 113 tests.
+
+**RED (7.1)** — `npm test`: `test/correlation.test.ts` authored first (12 tests). Whole file fails to resolve the not-yet-written module: `Error [ERR_MODULE_NOT_FOUND]: Cannot find module '…/src/correlation.ts' imported from '…/test/correlation.test.ts'`. Result: `tests 114 / pass 113 / fail 1` (single `✖ test/correlation.test.ts`).
+
+**GREEN (7.2)** — implemented `src/correlation.ts`. First run failed one RED literal (`subagent_run tool_call registers a pending task`): a pending run was stored only in the `pending` map, not in the task registry, so `activeTasks()` returned 0. Fixed by registering the run under its `toolCallId` placeholder in the registry, then promoting to the real `taskId` on result. Also fixed a tooling-mangled import (autofix corrupted `import type { WorkerRow }`). Final GREEN: `tests 125 / pass 125 / fail 0`.
+
+**TRIANGULATE (7.3)** — added 6 adversarial tests (no launch-order/timestamp guessing across reversed worker order; deterministic repeat for the scout 1:1 match; cancel mid-run evicts and removes row identity; finished tasks leave the active set; hostile ANSI/control agent+label sanitized; unmatched worker preserves phase/tool/model). `npm test` → `tests 131 / pass 131 / fail 0`.
+
+**REFACTOR (7.4)** — extracted `resolveKind`, `resolveTaskId`, and `recordCall` helpers, and introduced the `GentleAgentsInfo` type, collapsing three nearly-identical `tool_result` branches and the `calls.set` guards; behavior unchanged. `npm test` → `tests 131 / pass 131 / fail 0`.
+
+### Focused Test Command & Runtime Harness
+
+- Focused: `node --test "test/correlation.test.ts"` → `tests 18 / pass 18 / fail 0`.
+- Runtime harness: `N/A` — exercised entirely through mocked Pi `tool_call`/`tool_result` events and in-memory `WorkerSnapshot`s (injected `now` clock); no live Pi, process, or filesystem interaction.
+
+### Files Changed (WU-7)
+
+- `src/correlation.ts` (new, 417 lines): `CorrelationEngine` (`handleToolCall`, `handleToolResult`, `correlate`, `tasks`/`activeTasks`), `PendingRun`/`CallEntry`/`GentleAgentsInfo` records, tolerant event parsers (`readToolCallId`, `readToolName`, `readInputString`, `readTaskIdFromInput`, `readGentleAgents`), status mapping (`mapGentleStatus`/`continueStatus`/`isFinishedStatus`), the two-regime join, and `upsert`/`reactivate`/`evict`/`recordCall`/`resolveTaskId`/`resolveKind` transitions. Exports `SUBAGENT_RUN`/`SUBAGENT_CONTINUE`/`SUBAGENT_CANCEL` and `CorrelatedWorker`.
+- `test/correlation.test.ts` (new, 345 lines): 18 tests (12 RED + 6 TRIANGULATE).
+- `openspec/changes/live-tps-meter/tasks.md` (checkboxes 7.1–7.4 → `- [x]`).
+- `openspec/changes/live-tps-meter/apply-progress.md` (this section).
+
+### Budget
+
+- Authored lines: `src/correlation.ts` **417** + `test/correlation.test.ts` **345** = **762 changed lines** (new, untracked files).
+- Within the maintainer-authorized **1,200-line WU-5–WU-9 ceiling** (no `size:exception` needed). Product-only count (`src/correlation.ts`) is 417 lines.
+
+### Workload / PR Boundary
+
+- Deliverable: deterministic task/worker correlation engine with honest never-guess fallback. PR #7 of the stacked-to-main chain (WU-1 → … → WU-7 → WU-8 → WU-9), stacked on WU-1 (`types.ts` supplies `TrackedTask`/`TaskMode`/`TaskStatus`/`WorkerSnapshot`), WU-3 (`render.ts` supplies `WorkerRow`), and WU-2 (`format.ts` supplies `sanitizeText`). WU-8 `extensions/index.ts` is the first consumer.
+
+### Rollback Boundary
+
+Delete the two WU-7 files to remove this unit cleanly: `src/correlation.ts`, `test/correlation.test.ts`. WU-1/WU-3/WU-2 primitives are intact; no later unit imports `correlation.ts` yet (WU-8 will).
+
+### Deviations from Design
+
+1. **Pending runs carry a `toolCallId` placeholder `taskId`** until the result assigns the real task id, so `activeTasks()` (and Regime A) see a just-launched subagent before its `tool_result` arrives. The placeholder is promoted (deleted + re-keyed) on result.
+2. **Task-mode `subagent_run` results carry terminal `status` (`completed`/`failed`), while background runs return `queued`.** gentle-pi's `launch` awaits task-mode completion, so `mapGentleStatus` maps real `TASK_STATUS` values (`queued→pending`, `running/waiting→running`, `completed/failed/timed_out→completed`, `cancelled→cancelled`); the design's "run result → running" is treated as the default when `status` is absent.
+3. **`subagent_continue` uses `input.task_id` (snake_case)** as the target, matching gentle-pi's tool schema; it re-activates the existing task rather than tracking gentle-pi's follow-up as a brand-new task id.
+4. **Worker-side completion (phase `complete` / unlink) is handled by WU-5 eviction, not by the registry.** `correlate()` only sees live workers, so a completed worker produces no row; a stale active task whose worker vanished can only degrade to Regime B fallback (never a wrong badge).
+5. **`CorrelatedWorker` adds optional `taskId`/`label` beyond `WorkerRow`** so tests can assert the label; `render.ts` (WU-3) currently renders only the `badge`, and WU-8 may surface `label` later.
