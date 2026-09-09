@@ -308,3 +308,58 @@ Delete the two WU-5 files to remove this unit cleanly: `src/channel-guard.ts`, `
 2. **`completedAt`, when present, must be a finite positive number.** Design §3 only validates `startTime`/`updatedAt`; I applied the same positive-timestamp rule to `completedAt` for consistency and rejected invalid values rather than emitting them.
 3. **Scavenger age measured from `.owner.created`, not directory mtime.** Using the marker's own creation timestamp is immune to `touch`/atime churn and satisfies "positively match the package's ownership marker and schema"; the `.owner` must also carry `v === 1` (schema) to be considered.
 4. **`removeSessionDirectory` requires a `pi-tps-*` basename.** This is the ownership boundary that prevents an accidental non-package path from ever being recursively deleted; it does not require a `.owner` marker (the parent owns its directory by name even if the marker readback fails).
+
+## Work Unit 6 — Event Tracker: Streaming TPS, Fallback & Turn Finalization (tasks 6.1–6.4)
+
+### Status
+
+- Change: `live-tps-meter`; phase: `sdd-apply`; unit: **WU-6 complete** (tasks 6.1–6.4 all `- [x]` in `tasks.md`).
+- `src/tracker.ts` and `test/tracker.test.ts` authored; `npm test` GREEN at **113/113** (baseline was 94).
+- Implementation tasks overall: 24/41 complete (WU-1 4 + WU-2 4 + WU-3 4 + WU-4 4 + WU-5 4 + WU-6 4).
+- Strict TDD followed (RED → GREEN → TRIANGULATE → REFACTOR) with `npm test` (Node 24 built-in `node --test`, native type stripping). Only `src/tracker.ts` + tests touched; no correlation or extension wiring implemented.
+
+### TDD Cycle Evidence
+
+Baseline before WU-6: 94 tests.
+
+**RED (6.1)** — `npm test`: `test/tracker.test.ts` authored first (10 tests). Whole file fails to resolve the not-yet-written module: `Error [ERR_MODULE_NOT_FOUND]: Cannot find module '…/src/tracker.ts' imported from '…/test/tracker.test.ts'`. Result: `tests 95 / pass 94 / fail 1` (single `✖ test/tracker.test.ts`).
+
+**GREEN (6.2)** — implemented `src/tracker.ts`. First run: two RED expectations were corrected (author fixture arithmetic, not a code bug): the first `message_update` establishes the elapsed base, so its own TPS is 0; the rate becomes non-zero only once time elapses after that first delta. After correction, `npm test` → `tests 104 / pass 104 / fail 0` (94 + 10 new). During GREEN, the initial `deepGet` helper (returning `unknown`) was rejected by the self-scan `no-unknown-returns` rule and replaced with typed `readStringAt`/`readNumberAt`/`readRecordAt` event-payload parsers; this is a boundary-typing fix with identical behavior.
+
+**TRIANGULATE (6.3)** — added 9 adversarial tests (read-only render ticks never mutate stats; counter reset while session stats retain prior turns; no-usage fallback for the whole turn then estimate finalization; absent optional fields never throw and leave a sane state; `complete()` finalizes an open message idempotently; `totalTokens` accumulates authoritative output while streaming tokens are included live; tool end returns to `streaming` when a message is still open; p95 bootstraps after 64 finalized turns; thinking deltas count toward the estimate). `npm test` → `tests 113 / pass 113 / fail 0`.
+
+**REFACTOR (6.4)** — extracted `onModelSelect`/`onThinkingLevelSelect` private methods so every `handle()` event type dispatches to a private handler (message/tool/model/thinking); behavior unchanged. `npm test` → `tests 113 / pass 113 / fail 0`.
+
+### Focused Test Command & Runtime Harness
+
+- Focused: `node --test "test/tracker.test.ts"` → `tests 19 / pass 19 / fail 0`.
+- Runtime harness: `N/A` — exercised entirely through the mocked Pi event emitter (`EventTracker.handle(…)`) with an injected clock; no live Pi/process/fs interaction in WU-6.
+
+### Files Changed (WU-6)
+
+- `src/tracker.ts` (new, 372 lines): `EventTracker` state machine (`handle` dispatcher over `message_start`/`message_update`/`message_end`/`tool_execution_start`/`tool_execution_end`/`model_select`/`thinking_level_select`), `snapshot()` (`WorkerSnapshot`-shaped), `sessionStats()` (`{sparkline, mean, p95, p95SampleCount}`), `complete()`; tolerant payload parsers (`readOutputUsage` across RPC `usage.output` and in-process `message.usage.output`, `readDeltaLength` for text/thinking deltas, `isAssistantTurn` role gate, `readModelLabel`, `readThinkingLevel`, `clampLabel`, `estimateTokens`). Updates strictly on `handle()`/`complete()`; reads never mutate state.
+- `test/tracker.test.ts` (new, 422 lines): 19 tests.
+- `openspec/changes/live-tps-meter/tasks.md` (checkboxes 6.1–6.4 → `- [x]`).
+- `openspec/changes/live-tps-meter/apply-progress.md` (this section).
+
+### Budget
+
+- Authored lines: `src/tracker.ts` **372** + `test/tracker.test.ts` **422** = **794 changed lines** (new files, `git diff --numstat`).
+- Within the maintainer-authorized **1,200-line WU-5–WU-9 ceiling** (no `size:exception` needed). Product-only count (`src/tracker.ts`) is 372 lines.
+
+### Workload / PR Boundary
+
+- Deliverable: main/worker streaming TPS event tracker with estimate fallback, authoritative turn finalization, and session statistics. PR #6 of the stacked-to-main chain (WU-1 → … → WU-6 → WU-7 → WU-8 → WU-9), stacked on WU-1 (`stats.ts` supplies `RingBuffer`/`IncrementalMean`/`P2Quantile`/`computeTps`; `types.ts` supplies `WorkerSnapshot`/`WorkerPhase`/constants).
+
+### Rollback Boundary
+
+Delete the two WU-6 files to remove this unit cleanly: `src/tracker.ts`, `test/tracker.test.ts`. WU-1 (`src/stats.ts`, `src/types.ts`) is intact; no later unit imports `tracker.ts` yet (WU-7 `correlation.ts` and WU-8 `extensions/index.ts` will consume it).
+
+### Deviations from Design
+
+1. **Model label uses the compact `id`, not `provider/id`.** Design §5's panel example shows `claude-3-7-sonnet` (the id); Pi's `model_select` passes `event.model` as `{provider, id}`, so `readModelLabel` returns `id` to match that example. A string `event.model` is also tolerated.
+2. **`p95SampleCount` exposed in `sessionStats()`.** Adds concrete observability for "p95 was updated" without requiring 64 turns to assert a bootstrapped value; it mirrors `P2Quantile.count` and lets the RED phase assert push-through deterministically.
+3. **`complete()` seam added.** Not in tasks 6.1–6.4 but required for the `WorkerSnapshot`-shaped state to represent phase `"complete"`; WU-8 will call it on `agent_end`. It finalizes any still-open message from the estimate first (idempotent).
+4. **Reported usage is retained monotonically.** `messageTokens = max(reportedTokens, estimateTokens(chars))` so a provider that reports usage and then omits it on later chunks can never regress the token count.
+5. **Live TPS is 0 on the first output delta.** The elapsed base starts at the first delta, so the first delta has zero elapsed and yields 0 by construction; the meter "moves" on the second and later deltas (this is the spec's "elapsed-time base starts at the first observed output delta").
+6. **Character estimate counts `thinking_delta` in addition to `text_delta`**, per `explore.md` §1 ("Filters for type text_delta or thinking_delta"), both accumulated into `messageChars`.
