@@ -417,3 +417,55 @@ Delete the two WU-7 files to remove this unit cleanly: `src/correlation.ts`, `te
 3. **`subagent_continue` uses `input.task_id` (snake_case)** as the target, matching gentle-pi's tool schema; it re-activates the existing task rather than tracking gentle-pi's follow-up as a brand-new task id.
 4. **Worker-side completion (phase `complete` / unlink) is handled by WU-5 eviction, not by the registry.** `correlate()` only sees live workers, so a completed worker produces no row; a stale active task whose worker vanished can only degrade to Regime B fallback (never a wrong badge).
 5. **`CorrelatedWorker` adds optional `taskId`/`label` beyond `WorkerRow`** so tests can assert the label; `render.ts` (WU-3) currently renders only the `badge`, and WU-8 may surface `label` later.
+
+## Work Unit 8 — Extension Wiring & Role Detection (tasks 8.1–8.4)
+
+### Status
+
+- Change: `live-tps-meter`; phase: `sdd-apply`; unit: **WU-8 complete** (tasks 8.1–8.4 all `- [x]` in `tasks.md`).
+- `extensions/index.ts` and `test/extension.test.ts` authored; `npm test` GREEN at **139/139** (baseline was 131).
+- Implementation tasks overall: 32/41 complete (WU-1→WU-8 = 8×4). Only WU-8 surfaces touched (`extensions/index.ts`, `test/extension.test.ts`); no fallback/docs work performed.
+- Strict TDD followed (RED → GREEN → TRIANGULATE → REFACTOR) with `npm test` (Node 24 built-in `node --test`, native type stripping).
+
+### TDD Cycle Evidence
+
+Baseline before WU-8: 131 tests.
+
+**RED (8.1)** — `npm test`: `test/extension.test.ts` authored first (4 tests: full `detectRole` decision matrix, parent lifecycle, worker publication + UI suppression, headless no-op). The whole file fails to resolve the not-yet-written module: `Error [ERR_MODULE_NOT_FOUND]: Cannot find module '…/extensions/index.ts' imported from '…/test/extension.test.ts'`. Result: `tests 132 / pass 131 / fail 1` (`✖ test/extension.test.ts`).
+
+**GREEN (8.2)** — implemented `extensions/index.ts` (`detectRole`, `wireSession`, `wireParent`, `wireWorker`). `npm test` → `tests 135 / pass 135 / fail 0` (131 + 4 new).
+
+**TRIANGULATE (8.3)** — added 4 lifecycle tests: `session_shutdown` clears timer/widget/directory; worker RPC stream stays free of all UI across the full event set; worker with a missing channel directory stays silent and creates no files; the render tick composes exactly the WU-3 panel from tracker/correlation state. `npm test` → `tests 139 / pass 139 / fail 0`.
+
+**REFACTOR (8.4)** — extracted `wireTrackedEvents` to shared parent/worker event registration (removed the duplicated `for (const eventName of TRACKED_EVENTS)` loops); no behavior change. `npm test` → `tests 139 / pass 139 / fail 0`.
+
+### Focused Test Command & Runtime Harness
+
+- Focused: `node --test "test/extension.test.ts"` → `tests 8 / pass 8 / fail 0`.
+- Runtime harness (mocked Pi lifecycle end-to-end): a mocked `ExtensionAPI` (`pi.on` collecting handlers) and mocked `ExtensionContext` (`ctx.mode`, `ctx.hasUI`, `ctx.ui` spies) drive the module; timers and the temp root are injected so the parent's unref'd 200 ms interval, `PI_TPS_DIR` export/cleanup, worker snapshot publication/unlink, and headless no-op are exercised without a live Pi. Result: `tests 8 / pass 8 / fail 0` via `node --test`.
+
+### Files Changed (WU-8)
+
+- `extensions/index.ts` (new, 272 lines): `detectRole` (decision matrix), `wireSession` seam, `wireParent` (tracker, channel dir, scavenger, unref'd 200 ms render interval, widget above editor, shutdown cleanup), `wireWorker` (channel verification, throttled publication, zero UI, unlink via `agent_end`/`session_shutdown`/exit), headless no-op; `RENDER_INTERVAL_MS` (200) and `WIDGET_ID`. Public Pi API consumed via `import type { ExtensionAPI }` only; never imports gentle-pi.
+- `test/extension.test.ts` (new, 438 lines): 8 tests (4 RED + 4 TRIANGULATE).
+- `openspec/changes/live-tps-meter/tasks.md` (checkboxes 8.1–8.4 → `- [x]`).
+- `openspec/changes/live-tps-meter/apply-progress.md` (this section).
+
+### Budget
+
+- Authored lines: `extensions/index.ts` **272** + `test/extension.test.ts` **438** = **710 changed lines** (new, untracked files).
+- Within the maintainer-authorized **1,200-line WU-5–WU-9 ceiling** (no `size:exception` needed). Product-only count (`extensions/index.ts`) is 272 lines.
+
+### Workload / PR Boundary
+
+- Deliverable: role detection and lifecycle wiring joining all prior units. PR #8 of the stacked-to-main chain (WU-1 → … → WU-8 → WU-9), stacked on the WU-1/WU-4/WU-5/WU-6/WU-7 modules. WU-9 (`test/fallback.test.ts`, `README.md`, `LICENSE`) is the sole follow-up.
+
+### Rollback Boundary
+
+Delete the two WU-8 files to remove this unit cleanly: `extensions/index.ts`, `test/extension.test.ts`. WU-1–WU-7 modules are intact and none imports `extensions/index.ts`; WU-9 has not been started.
+
+### Deviations from Design
+
+1. **Parent renders once immediately before starting the 200 ms interval.** The design's lifecycle sketch only shows the interval; the extra first render makes the panel visible promptly and is observable in the same widget contract.
+2. **Window default is `process.stdout.columns || 80` exactly as specified**, passed straight to `renderPanel`; no extra clamping occurs here because WU-3 already clamps internally.
+3. **Worker unlinks on `agent_end`, `session_shutdown`, and process `exit`** per task 8.2, rather than publishing a `complete` snapshot on `agent_end`; the disappearing file is the parent's eviction signal, matching the subagent-rows "completed worker row disappears" scenario.
