@@ -431,6 +431,33 @@ test("README install instructions match actual package.json metadata", () => {
   );
 });
 
+test("package.json files allowlist ships only runtime/public artifacts", () => {
+  const pkg = JSON.parse(readRepoFile("package.json") ?? "{}") as {
+    files?: unknown;
+  };
+
+  assert.ok(
+    Array.isArray(pkg.files),
+    "package.json declares a files allowlist",
+  );
+
+  const allowlist = (pkg.files as string[]).slice().sort();
+  const expected = ["LICENSE", "README.md", "extensions/", "src/"].sort();
+
+  assert.deepEqual(
+    allowlist,
+    expected,
+    "public package allowlist contains only runtime/public artifacts",
+  );
+
+  for (const excluded of ["openspec/", "test/", ".pi/"]) {
+    assert.ok(
+      !allowlist.includes(excluded),
+      `allowlist must not ship ${excluded}`,
+    );
+  }
+});
+
 // --------------------------------------------------------------------------
 // 9.3 TRIANGULATE: residual degradation under evicted and repeated failures.
 // --------------------------------------------------------------------------
