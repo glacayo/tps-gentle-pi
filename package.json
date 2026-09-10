@@ -14,7 +14,7 @@
     "meter"
   ],
   "pi": {
-    "extensions": "./extensions"
+    "extensions": ["./extensions"]
   },
   "files": [
     "extensions/",

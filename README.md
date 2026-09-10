@@ -87,7 +87,7 @@ npm test
 ## Package metadata
 
 - Name: `tps-gentle-pi`
-- Pi manifest: `pi.extensions = "./extensions"` (Pi discovers the extension here)
+- Pi manifest: `pi.extensions = ["./extensions"]` (Pi discovers the extension here)
 - Discovery keywords: `pi-package`, `pi-extension`, `throughput`,
   `tokens-per-second`, `tps`, `meter`
 - Optional peer dependency: `@earendil-works/pi-coding-agent` (declared optional via

@@ -403,7 +403,7 @@ test("README install instructions match actual package.json metadata", () => {
   assert.ok(readme !== null, "README.md exists");
   const pkg = JSON.parse(readRepoFile("package.json") ?? "{}") as {
     name?: string;
-    pi?: { extensions?: string };
+    pi?: { extensions?: string[] };
     keywords?: unknown;
   };
 
@@ -414,10 +414,15 @@ test("README install instructions match actual package.json metadata", () => {
     "README install command uses the actual package name",
   );
 
-  const extensions = pkg.pi?.extensions ?? "./extensions";
+  assert.deepEqual(
+    pkg.pi?.extensions,
+    ["./extensions"],
+    'pi.extensions must be the array ["./extensions"] so Pi discovers and loads it',
+  );
+
   assert.ok(
-    readme.includes(extensions),
-    `README documents the pi manifest target ${extensions}`,
+    readme.includes("./extensions"),
+    "README documents the pi manifest target ./extensions",
   );
 
   const keywords = Array.isArray(pkg.keywords) ? pkg.keywords : [];
