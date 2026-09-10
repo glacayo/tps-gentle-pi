@@ -23,6 +23,19 @@ the sources directly, and nothing is compiled.
 3. Confirm the main gauge, `tok/s`, sparkline, `μ`, and `p95` update while output
    streams.
 
+## What it looks like
+
+The panel sits above the editor while a response streams:
+
+![Main agent TPS meter in the panel above the editor: gauge, live tok/s rate,
+12-turn sparkline, mean, and p95](docs/images/main-agent.png)
+
+*Main meter: gauge, live `tok/s`, 12-turn sparkline, `μ`, and `p95`.*
+
+![Same TPS panel with one active gentle-pi subagent row under the main meter](docs/images/main-with-subagent.png)
+
+*Main meter with one active gentle-pi subagent row while the worker streams.*
+
 ## How it works
 
 | Area | Decision |
@@ -39,7 +52,7 @@ extension inside every child worker. Gentle Agents launches subagents as isolate
 `pi --mode rpc` child processes, so the only ways a child gets the extension are
 package discovery or an explicit propagated load.
 
-A one-off **`pi -e`** load in the parent is _not_ propagated to children. In that
+A one-off **`pi -e`** load in the parent is *not* propagated to children. In that
 case the main panel keeps working, but no subagent rows appear — the extension
 never fabricates rows for workers that did not publish a snapshot.
 

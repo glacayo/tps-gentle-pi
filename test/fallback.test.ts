@@ -447,7 +447,13 @@ test("package.json files allowlist ships only runtime/public artifacts", () => {
   );
 
   const allowlist = (pkg.files as string[]).slice().sort();
-  const expected = ["LICENSE", "README.md", "extensions/", "src/"].sort();
+  const expected = [
+    "LICENSE",
+    "README.md",
+    "docs/images/",
+    "extensions/",
+    "src/",
+  ].sort();
 
   assert.deepEqual(
     allowlist,

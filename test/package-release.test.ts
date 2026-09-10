@@ -11,7 +11,8 @@
 //   - .gitignore additions while preserving .atl/.
 //   - scripts/verify-package-files.mjs existence, wiring, and anti-recursion
 //     (never a prepack hook that re-runs `npm pack`).
-//   - the direct TypeScript/no-build 13-file tarball surface.
+//   - the direct TypeScript/no-build 15-file tarball surface, including the
+//     README's docs/images screenshots.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -34,7 +35,7 @@ const pkg = JSON.parse(read("package.json")) as Record<string, unknown>;
 
 test("package.json carries public release metadata for the glacayo repo", () => {
   assert.equal(pkg.name, "tps-gentle-pi");
-  assert.equal(pkg.version, "0.1.0");
+  assert.equal(pkg.version, "0.1.1");
   assert.equal(pkg.author, "glacayo");
   assert.equal(
     pkg.repository && (pkg.repository as { url?: string }).url,
@@ -68,11 +69,27 @@ test("package.json uses the corrected `*` optional Pi peer dependency", () => {
   );
 });
 
-test("package.json keeps the direct TypeScript/no-build 13-file surface", () => {
+test("package.json keeps the direct TypeScript/no-build 15-file surface", () => {
   const files = pkg.files as string[];
   assert.ok(Array.isArray(files), "files allowlist is present");
-  for (const entry of ["extensions/", "src/", "README.md", "LICENSE"]) {
+  for (const entry of [
+    "extensions/",
+    "src/",
+    "docs/images/",
+    "README.md",
+    "LICENSE",
+  ]) {
     assert.ok(files.includes(entry), `files includes ${entry}`);
+  }
+  // The README screenshots ship inside the tarball for npm's rendered README.
+  for (const image of [
+    "docs/images/main-agent.png",
+    "docs/images/main-with-subagent.png",
+  ]) {
+    assert.ok(
+      fs.existsSync(path.join(root, image)),
+      `${image} exists in the repository`,
+    );
   }
   // The verifier, tests, workflows, and runtime state must never leak into the
   // published tarball.
@@ -146,5 +163,5 @@ test("verify-package-files.mjs exists, is wired, and passes on this workspace", 
     encoding: "utf8",
   });
   assert.match(out, /package verification PASSED/i);
-  assert.match(out, /13/, "reports the 13-file tarball surface");
+  assert.match(out, /15/, "reports the 15-file tarball surface");
 });

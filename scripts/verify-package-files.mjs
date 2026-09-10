@@ -90,10 +90,12 @@ check(
   "no prepack hook (no recursive npm pack)",
 );
 
-// --- Exact 13-file tarball surface ------------------------------------------
+// --- Exact 15-file tarball surface ------------------------------------------
 const expectedFiles = [
   "LICENSE",
   "README.md",
+  "docs/images/main-agent.png",
+  "docs/images/main-with-subagent.png",
   "extensions/index.ts",
   "package.json",
   "src/channel-guard.ts",
@@ -109,11 +111,23 @@ const expectedFiles = [
 
 let packed = [];
 try {
-  const raw = execFileSync("npm", ["pack", "--dry-run", "--json"], {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  // Windows resolves npm through npm.cmd, a batch shim Node can only spawn
+  // through a shell (a bare `spawnSync npm` fails with ENOENT). There the
+  // command is a fixed string, which also avoids the DEP0190 args-concatenation
+  // deprecation; POSIX keeps the direct arg-vector exec.
+  const raw =
+    process.platform === "win32"
+      ? execFileSync("npm pack --dry-run --json", {
+          cwd: root,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: true,
+        })
+      : execFileSync("npm", ["pack", "--dry-run", "--json"], {
+          cwd: root,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
   packed = JSON.parse(raw);
 } catch (error) {
   failures.push(`npm pack --dry-run --json failed: ${error.message}`);
@@ -130,7 +144,7 @@ if (Array.isArray(packed) && packed.length > 0) {
     actual.every((p, i) => p === expected[i]);
   check(
     same,
-    `packed file set matches the 13-file surface (got ${actual.length} files)`,
+    `packed file set matches the 15-file surface (got ${actual.length} files)`,
   );
   if (!same) {
     failures.push(`  expected: ${JSON.stringify(expected)}`);
