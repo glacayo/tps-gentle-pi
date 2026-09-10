@@ -537,3 +537,73 @@ Final verification only, all `- [ ]` in `tasks.md`: 10.1 (clean full `npm test`)
 - `cognitive-doc-design` (`/home/glacayom/.config/opencode/skills/cognitive-doc-design/SKILL.md`)
 
 `skill_resolution`: paths-injected (parent-provided exact paths read before work).
+
+## Final Verification & Delivery Preparation (tasks 10.1–10.5)
+
+### Status
+
+- Change: `live-tps-meter`; phase: `sdd-apply`; final verification complete.
+- Tasks 10.1–10.5 all marked `- [x]` in `tasks.md`. Implementation tasks overall: **41/41 complete**.
+- Strict TDD is active, but 10.1–10.5 are verification tasks (re-run focused tests over already-implemented behavior), not a new feature cycle; RED→GREEN-TRIANGULATE-REFACTOR does not apply. Evidence below is observed test/inspect output, not synthesized.
+- **No product code was changed.** Only `openspec/changes/live-tps-meter/tasks.md` (5 checkboxes) and this `apply-progress.md` were edited. Working tree is clean and nothing was committed.
+
+### Structured Status Consumed
+
+- Native token: `sha256:3a00d5643c18dfa11d5cad562c07ea7335be3527ed5d860c47d6fc088c9c0094`; review budget 1,200 changed lines.
+- `artifactStore: openspec` (authoritative; no `resolve-via-engram` carve-out); `applyState: ready`; `actionContext.mode: repo-local`; `allowedEditRoots: /home/glacayom/localhost/tps-gentle-pi`; warnings: none.
+- Delivery decision already human-resolved: `stacked-to-main`, WU-1 → … → WU-9; authoritative ceilings WU-3 ≤ 600, WU-4 ≤ 900, WU-5–WU-9 ≤ 1,200 (see tasks.md "Execution constraints").
+
+### 10.1 — Clean full `npm test` (PASS)
+
+- Command: `npm test` (script: `node --test "test/*.test.ts"`).
+- Result: `ℹ tests 149 / ℹ pass 149 / ℹ fail 0`; exit code `0`; `duration_ms 691.75`.
+- Confirmed: Node 24 built-in `node --test` runs `.ts` directly (native type stripping); `package.json` `scripts` contains only `test` (no `build`/`tsc`/bundler); no generated runtime artifacts exist — `find` returned zero `dist`/`build`/`out`/`*.js`/`*.cjs`/`*.mjs`/`*.map` under the repo (excluding `.git`/`node_modules`).
+
+### 10.2 — Package metadata inspect (PASS)
+
+- Command: `npm pkg get name version license type pi keywords peerDependencies peerDependenciesMeta scripts.test`.
+- Observed: name `tps-gentle-pi`; version `0.1.0`; license `MIT`; type `module`; `pi` → `{ "extensions": "./extensions" }`; keywords `["pi","pi-package","pi-extension","throughput","tokens-per-second","tps","meter"]`; `peerDependencies` → `{"@earendil-works/pi-coding-agent": ">=3.0.0"}`; `peerDependenciesMeta` → `{"@earendil-works/pi-coding-agent": {"optional": true}}`; `scripts.test` → `node --test "test/*.test.ts"`.
+- All package-distribution spec requirements satisfied (name, `./extensions` manifest, `pi-package` keyword, extension-discovery keywords, optional peer declared via `peerDependenciesMeta`).
+
+### 10.3 — Width safety & ANSI/control leak re-run (PASS)
+
+- Command: `node --test test/format.test.ts test/render.test.ts`.
+- Result: `ℹ tests 28 / ℹ pass 28 / ℹ fail 0` (`duration_ms 321.13`).
+- Confirmed by observed cases: `every panel line satisfies stripAnsi(line).length <= cols at 60/80/120/160`; `stripAnsi removes ANSI SGR color sequences`; `sanitizeText strips newlines and control characters`; `sanitizeText strips ANSI escapes without leaking CSI parameters`; `sanitizeText never leaks ANSI or control characters from hostile names`; `maximally long sanitized labels still clamp within 60 columns`.
+
+### 10.4 — Channel cleanup & privacy re-run (PASS)
+
+- Command: `node --test test/channel.test.ts test/channel-guard.test.ts test/extension.test.ts test/fallback.test.ts`.
+- Result: `ℹ tests 54 / ℹ pass 54 / ℹ fail 0` (`duration_ms 768.07`).
+- Confirmed by observed cases: child unlink (`shutdown cancels pending trailing writes and unlinks the worker snapshot`); parent recursive removal of only its own dir (`removeSessionDirectory removes only its own package-owned directory`); scavenger preserves foreign dirs (`scavenger preserves every realistic foreign temp directory`, `scavengeStaleDirectories removes only verified stale owned dead dirs`); privacy (`snapshot packets provably contain no prompt, task, or generated text`, `truncated JSON mid-write is never aggregated as valid`); vanilla fallback (`vanilla Pi parent renders zero subagent rows…`, `aggregation failure during a refresh keeps the main panel updating`, `failed channel directory creation still initializes the main widget`).
+
+### 10.5 — Review workload confirmation (PASS)
+
+`git show --stat` per work unit (each WU is one commit; planning/control artifacts `apply-progress.md`/`tasks.md` are excluded from the product count, matching "planning artifacts are not product work-unit surfaces"):
+
+| WU | Commit | Product+test files | Insertions | Authorized ceiling | Result |
+| --- | --- | --- | --- | --- | --- |
+| WU-1 | 7bb313f | package.json + stats.ts + types.ts + stats.test.ts | 515 | WU-1-only exception (514) | accepted exception |
+| WU-2 | 91f51d5 | format.ts + graphics.ts + format.test.ts + graphics.test.ts | 379 | ≤ 400 (re-sliced) | ✓ |
+| WU-3 | d389472 | render.ts + render.test.ts | 460 | ≤ 600 | ✓ |
+| WU-4 | 68c55bf | channel.ts + channel.test.ts | 765 | ≤ 900 | ✓ |
+| WU-5 | 44b4032 | channel-guard.ts + channel-guard.test.ts | 921 | ≤ 1,200 | ✓ |
+| WU-6 | 2435174 | tracker.ts + tracker.test.ts | 812 | ≤ 1,200 | ✓ |
+| WU-7 | 1e3c7aa | correlation.ts + correlation.test.ts | 847 | ≤ 1,200 | ✓ |
+| WU-8 | 801fcb7 | extensions/index.ts + extension.test.ts | 782 | ≤ 1,200 | ✓ |
+| WU-9 | 738290e | fallback.test.ts + README.md + LICENSE | 645 | ≤ 1,200 | ✓ |
+
+- **Chain match:** `git log` old-first is `8e24fa3` (planning baseline) → `7bb313f` (WU-1) → `91f51d5` (WU-2) → `d389472` (WU-3) → `68c55bf` (WU-4) → `44b4032` (WU-5) → `2435174` (WU-6) → `1e3c7aa` (WU-7) → `801fcb7` (WU-8) → `738290e` (WU-9), matching the human-resolved `stacked-to-main` WU-1 → WU-9 plan exactly.
+- **Co-location:** all nine test files live in `test/` alongside `src/` and `extensions/index.ts`; each WU commit carries its own tests (WU-9 additionally carries README/LICENSE with its tests).
+- **WU-1 product exception recorded:** delivered at ~514 actual product lines (forecast ~330, ~1.56x expansion); git insertion count is 515 (1-line delta from the recorded `514` is a `wc -l`/git trailing-line convention, immaterial and already covered by the accepted WU-1-only exception + native reset).
+- **WU-2 accounting exception recorded:** the superseded original WU-2 draft and SDD/planning artifacts were committed once (planning baseline `8e24fa3`) so they stop inflating product-work-unit accounting; the re-sliced WU-2 landed at 379 product+test lines.
+- **Reconciliation note:** the earlier WU-3/WU-4 apply-progress "size:exception recommendation" notes (written against the superseded 400/600 ceilings) are superseded by the maintainer's explicit authorization in `tasks.md` (WU-3 ≤ 600, WU-4 ≤ 900). Git-authoritative totals — 460 (WU-3) and 765 (WU-4) — are within those authorized ceilings.
+
+### Files Changed (this final-apply session)
+
+- `openspec/changes/live-tps-meter/tasks.md` (checkboxes 10.1–10.5 → `- [x]`).
+- `openspec/changes/live-tps-meter/apply-progress.md` (this section).
+
+### Remaining Tasks
+
+None. All 41 implementation-owned tasks are `- [x]` in `tasks.md` (verified by re-read: 10.1–10.5 now show `- [x]`). Next recommended phase: **`sdd-verify`**.
