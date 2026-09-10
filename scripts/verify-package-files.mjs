@@ -34,20 +34,19 @@ function check(condition, message) {
 // --- Public release metadata -------------------------------------------------
 check(pkg.name === "tps-gentle-pi", `name is tps-gentle-pi (got ${pkg.name})`);
 check(
-  pkg.author === "GeoClawAgent",
-  `author is GeoClawAgent (got ${JSON.stringify(pkg.author)})`,
+  pkg.author === "glacayo",
+  `author is glacayo (got ${JSON.stringify(pkg.author)})`,
 );
 check(
-  pkg.repository?.url ===
-    "git+https://github.com/GeoClawAgent/tps-gentle-pi.git",
-  `repository.url is the GeoClawAgent GitHub repo (got ${pkg.repository?.url})`,
+  pkg.repository?.url === "git+https://github.com/glacayo/tps-gentle-pi.git",
+  `repository.url is the glacayo GitHub repo (got ${pkg.repository?.url})`,
 );
 check(
-  pkg.homepage === "https://github.com/GeoClawAgent/tps-gentle-pi#readme",
+  pkg.homepage === "https://github.com/glacayo/tps-gentle-pi#readme",
   `homepage is the README anchor (got ${pkg.homepage})`,
 );
 check(
-  pkg.bugs?.url === "https://github.com/GeoClawAgent/tps-gentle-pi/issues",
+  pkg.bugs?.url === "https://github.com/glacayo/tps-gentle-pi/issues",
   `bugs.url is the issue tracker (got ${pkg.bugs?.url})`,
 );
 check(

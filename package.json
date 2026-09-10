@@ -2,7 +2,7 @@
   "name": "tps-gentle-pi",
   "version": "0.1.0",
   "description": "Live tokens-per-second (TPS) meter for Pi with gentle-pi subagent visibility",
-  "author": "GeoClawAgent",
+  "author": "glacayo",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -10,11 +10,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GeoClawAgent/tps-gentle-pi.git"
+    "url": "git+https://github.com/glacayo/tps-gentle-pi.git"
   },
-  "homepage": "https://github.com/GeoClawAgent/tps-gentle-pi#readme",
+  "homepage": "https://github.com/glacayo/tps-gentle-pi#readme",
   "bugs": {
-    "url": "https://github.com/GeoClawAgent/tps-gentle-pi/issues"
+    "url": "https://github.com/glacayo/tps-gentle-pi/issues"
   },
   "keywords": [
     "pi",

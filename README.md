@@ -100,8 +100,8 @@ npm test
 
 ## Repository
 
-- Source: <https://github.com/GeoClawAgent/tps-gentle-pi>
-- Issues: <https://github.com/GeoClawAgent/tps-gentle-pi/issues>
+- Source: <https://github.com/glacayo/tps-gentle-pi>
+- Issues: <https://github.com/glacayo/tps-gentle-pi/issues>
 
 ## Troubleshooting
 

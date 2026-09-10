@@ -32,21 +32,18 @@ const pkg = JSON.parse(read("package.json")) as Record<string, unknown>;
 // package.json public release metadata contract
 // ---------------------------------------------------------------------------
 
-test("package.json carries public release metadata for the GeoClawAgent repo", () => {
+test("package.json carries public release metadata for the glacayo repo", () => {
   assert.equal(pkg.name, "tps-gentle-pi");
   assert.equal(pkg.version, "0.1.0");
-  assert.equal(pkg.author, "GeoClawAgent");
+  assert.equal(pkg.author, "glacayo");
   assert.equal(
     pkg.repository && (pkg.repository as { url?: string }).url,
-    "git+https://github.com/GeoClawAgent/tps-gentle-pi.git",
+    "git+https://github.com/glacayo/tps-gentle-pi.git",
   );
-  assert.equal(
-    pkg.homepage,
-    "https://github.com/GeoClawAgent/tps-gentle-pi#readme",
-  );
+  assert.equal(pkg.homepage, "https://github.com/glacayo/tps-gentle-pi#readme");
   assert.equal(
     pkg.bugs && (pkg.bugs as { url?: string }).url,
-    "https://github.com/GeoClawAgent/tps-gentle-pi/issues",
+    "https://github.com/glacayo/tps-gentle-pi/issues",
   );
 
   const engines = (pkg.engines ?? {}) as Record<string, string>;
