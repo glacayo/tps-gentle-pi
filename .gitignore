@@ -1,2 +1,17 @@
 # Local Pi runtime state
 .atl/
+
+# Local CodeGraph database state
+.codegraph/
+
+# Local Pi session/config state
+.pi/
+
+# Installed dependencies
+node_modules/
+
+# Packed tarballs
+*.tgz
+
+# macOS Finder metadata
+.DS_Store

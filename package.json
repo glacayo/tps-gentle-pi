@@ -2,8 +2,20 @@
   "name": "tps-gentle-pi",
   "version": "0.1.0",
   "description": "Live tokens-per-second (TPS) meter for Pi with gentle-pi subagent visibility",
-  "type": "module",
+  "author": "GeoClawAgent",
   "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GeoClawAgent/tps-gentle-pi.git"
+  },
+  "homepage": "https://github.com/GeoClawAgent/tps-gentle-pi#readme",
+  "bugs": {
+    "url": "https://github.com/GeoClawAgent/tps-gentle-pi/issues"
+  },
   "keywords": [
     "pi",
     "pi-package",
@@ -22,8 +34,11 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=3.0.0"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
@@ -31,6 +46,8 @@
     }
   },
   "scripts": {
-    "test": "node --test \"test/*.test.ts\""
+    "test": "node --test \"test/*.test.ts\"",
+    "verify:package": "node scripts/verify-package-files.mjs",
+    "release:check": "npm test && npm run verify:package"
   }
 }

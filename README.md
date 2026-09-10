@@ -87,11 +87,21 @@ npm test
 ## Package metadata
 
 - Name: `tps-gentle-pi`
+- Node requirement: `>=24.0.0` (`engines.node`). Node 24 executes the TypeScript
+  sources directly via type stripping, so there is no build step.
 - Pi manifest: `pi.extensions = ["./extensions"]` (Pi discovers the extension here)
 - Discovery keywords: `pi-package`, `pi-extension`, `throughput`,
   `tokens-per-second`, `tps`, `meter`
-- Optional peer dependency: `@earendil-works/pi-coding-agent` (declared optional via
-  `peerDependenciesMeta`)
+- Optional peer dependency: `@earendil-works/pi-coding-agent` with the `"*"` range,
+  declared optional via `peerDependenciesMeta`. Pi bundles its core packages, so
+  extensions list them as `"*"` peers and never bundle them.
+- Release channel: `publishConfig.access` is `public`; releases go through the
+  GitHub Actions `publish.yml` workflow with npm provenance.
+
+## Repository
+
+- Source: <https://github.com/GeoClawAgent/tps-gentle-pi>
+- Issues: <https://github.com/GeoClawAgent/tps-gentle-pi/issues>
 
 ## Troubleshooting
 
