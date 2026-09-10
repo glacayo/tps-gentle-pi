@@ -469,3 +469,71 @@ Delete the two WU-8 files to remove this unit cleanly: `extensions/index.ts`, `t
 1. **Parent renders once immediately before starting the 200 ms interval.** The design's lifecycle sketch only shows the interval; the extra first render makes the panel visible promptly and is observable in the same widget contract.
 2. **Window default is `process.stdout.columns || 80` exactly as specified**, passed straight to `renderPanel`; no extra clamping occurs here because WU-3 already clamps internally.
 3. **Worker unlinks on `agent_end`, `session_shutdown`, and process `exit`** per task 8.2, rather than publishing a `complete` snapshot on `agent_end`; the disappearing file is the parent's eviction signal, matching the subagent-rows "completed worker row disappears" scenario.
+
+## Work Unit 9 — Vanilla Fallback, Degradation Integration & Documentation (tasks 9.1–9.4)
+
+### Status
+
+- Change: `live-tps-meter`; phase: `sdd-apply`; unit: **WU-9 complete** (tasks 9.1–9.4 all `- [x]` in `tasks.md`).
+- `test/fallback.test.ts`, `README.md`, `LICENSE` authored; `npm test` GREEN at **149/149** (baseline was 139).
+- Implementation tasks overall: 36/41 complete (WU-1→WU-9 = 9×4; final verification 10.1–10.5 remain unchecked).
+- Strict TDD followed (RED → GREEN → TRIANGULATE → REFACTOR) with `npm test` (Node 24 built-in `node --test`, native type stripping).
+
+### Structured Status Consumed
+
+- Native token `sha256:1ae07244e099c2365fb5c80643e4e60a9d3f50ccbe6d1e58627c3a8b542454a5`; review budget 1,200 changed lines (maintainer-authorized WU-5–WU-9 ceiling).
+- `applyState: ready` (authoritative, `artifactStore: openspec`); `actionContext.mode: repo-local`, edit root `/home/glacayom/localhost/tps-gentle-pi`, warnings none.
+- Review Workload Gate: `Decision needed before apply: No`; `Chained PRs recommended: Yes`; `Chain strategy: stacked-to-main`. Delivery decision already human-resolved in prior sessions; WU-9 is the last product unit.
+
+### TDD Cycle Evidence
+
+Baseline before WU-9: 139 tests.
+
+**RED (9.1)** — `npm test`: `test/fallback.test.ts` authored first. Initial run: `tests 146 / pass 142 / fail 4`. Two failures were fixture-timing corrections (zero elapsed → `computeTps` legitimately 0), not wiring defects; after letting real milliseconds elapse between streaming deltas, the two runtime tests passed and the two genuine RED failures remained: `README.md exists` and `LICENSE exists` (`AssertionError: README.md exists` / `LICENSE exists`). Final RED state: `tests 146 / pass 144 / fail 2` (the two documentation artifacts absent), with all five runtime scenarios GREEN — **no `extensions/index.ts` wiring defect exposed**.
+
+**GREEN (9.2)** — authored `README.md` and `LICENSE` (MIT). No `extensions/index.ts` edit was needed (9.1 exposed no defect; task 9.2's "test-verification only" branch applies). `npm test` → `tests 146 / pass 146 / fail 0`.
+
+**TRIANGULATE (9.3)** — added three tests (completed worker + dead-pid worker evicted on next tick; five repeated failed-aggregation ticks never degrade the main panel; README install instructions match `package.json` name/manifest/keywords). `npm test` → `tests 149 / pass 149 / fail 0`.
+
+**REFACTOR (9.4)** — removed the unused `extraDeps` parameter from the `startParent` harness helper (no behavior change). `npm test` → `tests 149 / pass 149 / fail 0`.
+
+### Focused Test Command & Runtime Harness
+
+- Focused: `node --test "test/fallback.test.ts"` → `tests 10 / pass 10 / fail 0`.
+- Runtime harness (mocked vanilla and degraded sessions): a mocked Pi `on`/`ctx.ui.setWidget` surface plus a fixture temp root and fake interval timer drive the module; the vanilla parent streams a real-clock assistant turn, a `pi -e` parent asserts no worker snapshot files, a file-as-tmp-root forces channel creation failure (ENOTDIR), aggregation failure is forced by removing the channel directory, and completed/dead worker snapshots verify eviction. No live Pi or gentle-pi runtime is used. Result: `tests 10 / pass 10 / fail 0`.
+
+### Files Changed (WU-9)
+
+- `test/fallback.test.ts` (new, 508 lines): 10 tests across 9.1/9.2/9.3 phases.
+- `README.md` (new, 104 lines): quick path, `pi install npm:tps-gentle-pi`, child visibility + `pi -e` limitation, vanilla fallback, temporary-file lifecycle/privacy (0700/0600, `.owner`, scavenger), platforms (Linux/macOS/Windows), package metadata, troubleshooting, no telemetry.
+- `LICENSE` (new, 20 lines): MIT.
+- `openspec/changes/live-tps-meter/tasks.md` (checkboxes 9.1–9.4 → `- [x]`).
+- `openspec/changes/live-tps-meter/apply-progress.md` (this section).
+- `extensions/index.ts` — **unchanged** (no wiring fix required; 9.1 exposed no defect).
+
+### Budget
+
+- Authored lines: `test/fallback.test.ts` 508 + `README.md` 104 + `LICENSE` 20 = **632 changed lines** (new files; `extensions/index.ts` untouched).
+- Within the maintainer-authorized **1,200-line WU-5–WU-9 ceiling** (no `size:exception` needed).
+
+### Rollback Boundary
+
+Delete the three WU-9 files to remove this unit cleanly: `test/fallback.test.ts`, `README.md`, `LICENSE`. There is no documented wiring fix to revert (`extensions/index.ts` was not modified). WU-1–WU-8 modules are intact.
+
+### Deviations from Design
+
+1. **No `extensions/index.ts` wiring defect was exposed.** Task 9.2's `Exception` branch (test-verification only) applied; the only modifications were docs and tests.
+2. **README and LICENSE absence was the genuine RED, not runtime behavior.** The five runtime fallback scenarios already held under WU-8 wiring; two initial runtime failures were synchronous-fixture timing corrections (documented under RED), matching the WU-2 "author arithmetic, not a code bug" precedent.
+3. **README documents `pi.extensions = "./extensions"` and the discovery keywords explicitly**, beyond the spec's minimum, so the 9.3 metadata-match test is precise rather than tautological.
+
+## Remaining Tasks (unchecked)
+
+Final verification only, all `- [ ]` in `tasks.md`: 10.1 (clean full `npm test`), 10.2 (package metadata inspect), 10.3 (width safety re-run), 10.4 (channel cleanup/privacy re-run), 10.5 (review workload confirmation). Exact unchecked lines are preserved verbatim in `tasks.md`.
+
+## Skills Loaded
+
+- `work-unit-commits` (`/home/glacayom/.config/opencode/skills/work-unit-commits/SKILL.md`)
+- `chained-pr` (`/home/glacayom/.config/opencode/skills/chained-pr/SKILL.md`)
+- `cognitive-doc-design` (`/home/glacayom/.config/opencode/skills/cognitive-doc-design/SKILL.md`)
+
+`skill_resolution`: paths-injected (parent-provided exact paths read before work).
