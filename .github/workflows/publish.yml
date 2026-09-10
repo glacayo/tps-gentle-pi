@@ -1,0 +1,144 @@
+name: Publish
+
+# First-publication token bootstrap with provenance. The NODE_AUTH_TOKEN secret
+# is the maintainer's granular npm automation token for the initial v0.1.0
+# publish; `id-token: write` already enables npm provenance. This is NOT npm
+# trusted publishing yet: after v0.1.0 exists, configure npm trusted publishing
+# for this repository and remove NODE_AUTH_TOKEN from the publish step in a
+# follow-up before any future release.
+#
+# The workflow definition always lives on protected `main`; it is never
+# dispatched from a release tag. The single caller input is the exact annotated
+# version tag.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact annotated version tag to publish (vSemVer, e.g. v0.1.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+# Bind the caller input to an env var exactly once so shell steps reference
+# $RELEASE_TAG and never interpolate the raw workflow input into arbitrary code.
+env:
+  RELEASE_TAG: ${{ inputs.tag }}
+
+jobs:
+  publish:
+    name: Validate and publish to npm
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: npm
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate tag shape (vSemVer, stable or prerelease)
+        run: |
+          set -euo pipefail
+          # Stable v0.1.0 or prerelease v0.1.0-rc.1; no build metadata, no
+          # numeric-leading-zero core components.
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'; then
+            echo "::error::RELEASE_TAG '$RELEASE_TAG' must be vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE"
+            exit 1
+          fi
+          core="${RELEASE_TAG#v}"
+          core="${core%%-*}"
+          if printf '%s' "$core" | grep -Eq '(^|\.)0[0-9]'; then
+            echo "::error::numeric-leading-zero core version in '${core}'"
+            exit 1
+          fi
+          echo "Tag shape OK: $RELEASE_TAG"
+
+      - name: Enforce annotated tag and workflow/main/tag commit equality
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          git fetch origin "refs/tags/${RELEASE_TAG}" --quiet
+
+          tag_type="$(git cat-file -t "${RELEASE_TAG}" 2>/dev/null || true)"
+          if [ "${tag_type}" != "tag" ]; then
+            echo "::error::'${RELEASE_TAG}' is not an annotated tag (type '${tag_type}')"
+            exit 1
+          fi
+
+          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          remote_main="$(git rev-parse origin/main)"
+          head_commit="$(git rev-parse HEAD)"
+
+          if [ "${head_commit}" != "${remote_main}" ]; then
+            echo "::error::workflow commit ${head_commit} does not match remote main ${remote_main}"
+            exit 1
+          fi
+          if [ "${tag_commit}" != "${remote_main}" ]; then
+            echo "::error::tag '${RELEASE_TAG}' peeled commit ${tag_commit} does not match remote main ${remote_main}"
+            exit 1
+          fi
+          echo "Refs consistent: workflow=${head_commit} tag=${tag_commit} main=${remote_main}"
+
+      - name: Enforce package.json version equality
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          if [ "${RELEASE_TAG}" != "v${version}" ]; then
+            echo "::error::tag '${RELEASE_TAG}' does not match package.json version '${version}' (expected 'v${version}')"
+            exit 1
+          fi
+          echo "package.json version ${version} matches tag ${RELEASE_TAG}"
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Verify release package
+        run: npm run verify:package
+
+      - name: Final remote drift recheck
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          git fetch origin "refs/tags/${RELEASE_TAG}" --quiet
+          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          remote_main="$(git rev-parse origin/main)"
+          head_commit="$(git rev-parse HEAD)"
+          if [ "${tag_commit}" != "${remote_main}" ] || [ "${head_commit}" != "${remote_main}" ]; then
+            echo "::error::remote drift detected: tag=${tag_commit} main=${remote_main} workflow=${head_commit}"
+            exit 1
+          fi
+          echo "No remote drift: ${RELEASE_TAG} still targets main ${remote_main}"
+
+      - name: Derive dist-tag (latest|next)
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          case "${version}" in
+            *-*)
+              dist_tag="next"
+              ;;
+            *)
+              dist_tag="latest"
+              ;;
+          esac
+          echo "DIST_TAG=${dist_tag}" >> "$GITHUB_ENV"
+          echo "Derived dist-tag: ${dist_tag}"
+
+      - name: Publish to npm (provenance)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm publish --provenance --tag "${DIST_TAG}"
