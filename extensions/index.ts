@@ -63,11 +63,22 @@ interface MeterUi {
   setWidget(id: string, lines: string[] | undefined, options?: unknown): void;
 }
 
+/**
+ * Minimal structural surface of the session model exposed on `ExtensionContext`.
+ * Pi supplies a record carrying `provider` and `id`; the tracker's `model_select`
+ * parser also accepts a plain string, so both shapes are tolerated here.
+ */
+type MeterModel = string | { provider?: string; id?: string };
+
 /** Minimal structural surface of `ExtensionContext` consumed by the wiring. */
 interface MeterCtx {
   mode: string;
   hasUI: boolean;
   ui: MeterUi;
+  /** Model Pi resolved before the session started; absent when unavailable. */
+  model?: MeterModel;
+  /** Thinking level Pi resolved before the session started; absent when unset. */
+  thinkingLevel?: string;
 }
 
 /** Signature of a lifecycle/tool event handler registered with `pi.on`. */
@@ -161,6 +172,23 @@ function wireParentEvents(
   pi.on("tool_result", async (event) => correlation.handleToolResult(event));
 }
 
+/**
+ * Seeds a tracker with the model and thinking level Pi already resolved before the
+ * session started. Pi exposes both on `ctx` but emits no initial `model_select` or
+ * `thinking_level_select`, so without this seed the tracker stays empty and the
+ * first panel row / worker snapshot omits `provider/model:thinking` until the user
+ * changes either one. Seeding replays the tracker's own event parsers, so
+ * sanitization and clamping match the live event path exactly.
+ */
+function seedTrackerFromContext(tracker: EventTracker, ctx: MeterCtx): void {
+  if (ctx.model !== undefined) {
+    tracker.handle({ type: "model_select", model: ctx.model });
+  }
+  if (ctx.thinkingLevel !== undefined) {
+    tracker.handle({ type: "thinking_level_select", level: ctx.thinkingLevel });
+  }
+}
+
 function wireParent(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
   const setIntervalFn =
     deps.setInterval ??
@@ -180,6 +208,9 @@ function wireParent(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
   const tmpDir = deps.tmpDir ?? os.tmpdir();
 
   const tracker = new EventTracker({ now: deps.now });
+  // Seed before the first render tick so the initial panel already shows the
+  // session's model and thinking level (no model_select event arrives at startup).
+  seedTrackerFromContext(tracker, ctx);
   const correlation = new CorrelationEngine();
   const sessionDir = createSessionDirectory({ tmpDir });
   if (sessionDir !== null) process.env.PI_TPS_DIR = sessionDir;
@@ -214,7 +245,7 @@ function wireParent(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
   });
 }
 
-function wireWorker(pi: MeterApi, deps: WireDeps): void {
+function wireWorker(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
   const sessionDir = process.env.PI_TPS_DIR;
   // Channel verification: a worker with a missing channel directory must stay
   // silent and create no files, exactly like the headless role.
@@ -225,6 +256,9 @@ function wireWorker(pi: MeterApi, deps: WireDeps): void {
     workerId: `worker-${process.pid}`,
     now: deps.now,
   });
+  // Seed before any tracked event can publish, so the first snapshot carries the
+  // session's model and thinking level (no model_select event arrives at startup).
+  seedTrackerFromContext(tracker, ctx);
   const publisher = new ThrottledPublisher(sessionDir, process.pid);
 
   let closed = false;
@@ -267,7 +301,7 @@ export function wireSession(pi: MeterApi, deps: WireDeps = {}): void {
     if (role === "parent-tui") {
       wireParent(pi, ctx, deps);
     } else if (role === "gentle-worker") {
-      wireWorker(pi, deps);
+      wireWorker(pi, ctx, deps);
     }
     // headless-noop: intentionally do nothing.
   });

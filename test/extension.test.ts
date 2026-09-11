@@ -546,3 +546,193 @@ test("render tick composes exactly the panel (header + rows) from tracker and co
     "worker token total still shown",
   );
 });
+
+// ---------------------------------------------------------------------------
+// RED (bugfix): session-start model/thinking seeding.
+//
+// Pi resolves the model and thinking level before the session begins and exposes
+// both on `ctx`, but it emits no initial `model_select`/`thinking_level_select`.
+// The tracker therefore started empty, so the first parent render and the first
+// worker snapshot omitted `provider/model:thinking` until the user changed one.
+// ---------------------------------------------------------------------------
+
+/** Builds a session context carrying the model/thinking Pi already resolved. */
+function seededCtx<T extends object>(
+  ctx: T,
+  model: { provider: string; id: string } | undefined,
+  thinkingLevel: string | undefined,
+): T & { model?: { provider: string; id: string }; thinkingLevel?: string } {
+  return { ...ctx, model, thinkingLevel };
+}
+
+test("parent session_start seeds provider/model:thinking into the first rendered row", async (t) => {
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: undefined, PI_TPS_DIR: undefined });
+  const tmpDir = mkTmp(t);
+  const width = 120;
+  const prevColumns = process.stdout.columns;
+  process.stdout.columns = width;
+  t.after(() => {
+    process.stdout.columns = prevColumns;
+  });
+
+  const pi = makePi();
+  const { ctx, calls } = makeCtx("tui", true);
+  const seeded = seededCtx(
+    ctx,
+    { provider: "anthropic", id: "claude-3-5-haiku" },
+    "low",
+  );
+
+  // Fully controlled clock: the seed must not depend on event timing.
+  const clockMs = 1_000;
+  const clock = (): number => clockMs;
+  wireSession(pi, { ...fakeTimers(), tmpDir, now: clock });
+  await triggerSessionStart(pi, seeded);
+
+  // No model_select / thinking_level_select was emitted before the first render.
+  assert.ok(calls.setWidget.length >= 1, "widget rendered on session start");
+  const first = calls.setWidget[0];
+  assert.equal(first.id, WIDGET_ID);
+  const mainLine = stripAnsi((first.lines as string[])[1]);
+  assert.ok(
+    mainLine.includes("(anthropic/claude-3-5-haiku:low)"),
+    `first main row carries the seeded model: ${mainLine}`,
+  );
+});
+
+test("worker session_start seeds model and thinking into the first published snapshot", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx, calls } = makeCtx("rpc", true);
+  const seeded = seededCtx(ctx, { provider: "openai", id: "gpt-5" }, "high");
+
+  wireSession(pi, { ...fakeTimers() });
+  await triggerSessionStart(pi, seeded);
+
+  // No model_select emitted: the first significant transition publishes the seed.
+  await emit(
+    pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "bash" },
+    seeded,
+  );
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  assert.ok(fs.existsSync(snapshotFile), "snapshot published");
+  const parsed = JSON.parse(fs.readFileSync(snapshotFile, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(parsed.model, "openai/gpt-5");
+  assert.equal(parsed.thinkingLevel, "high");
+
+  // The RPC worker still writes nothing to the UI.
+  assert.deepEqual(calls.setWidget, []);
+  assert.deepEqual(calls.notify, []);
+  assert.deepEqual(calls.confirm, []);
+  assert.deepEqual(calls.setStatus, []);
+
+  await emit(pi, "agent_end", { type: "agent_end" }, seeded);
+});
+
+test("later model_select and thinking_level_select override the session-start seed", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx } = makeCtx("rpc", true);
+  const seeded = seededCtx(
+    ctx,
+    { provider: "anthropic", id: "claude-3-5-haiku" },
+    "low",
+  );
+
+  wireSession(pi, { ...fakeTimers() });
+  await triggerSessionStart(pi, seeded);
+
+  await emit(
+    pi,
+    "model_select",
+    { type: "model_select", model: { provider: "openai", id: "gpt-5" } },
+    seeded,
+  );
+  await emit(
+    pi,
+    "thinking_level_select",
+    { type: "thinking_level_select", level: "high" },
+    seeded,
+  );
+  await emit(
+    pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "read" },
+    seeded,
+  );
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  const parsed = JSON.parse(fs.readFileSync(snapshotFile, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(parsed.model, "openai/gpt-5", "later model_select wins");
+  assert.equal(
+    parsed.thinkingLevel,
+    "high",
+    "later thinking_level_select wins",
+  );
+
+  await emit(pi, "agent_end", { type: "agent_end" }, seeded);
+});
+
+test("parent session without ctx model or thinking renders no model segment", async (t) => {
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: undefined, PI_TPS_DIR: undefined });
+  const tmpDir = mkTmp(t);
+  const prevColumns = process.stdout.columns;
+  process.stdout.columns = 120;
+  t.after(() => {
+    process.stdout.columns = prevColumns;
+  });
+
+  const pi = makePi();
+  const { ctx, calls } = makeCtx("tui", true);
+
+  wireSession(pi, { ...fakeTimers(), tmpDir });
+  await triggerSessionStart(pi, ctx);
+
+  const mainLine = stripAnsi((calls.setWidget[0].lines as string[])[1]);
+  assert.ok(mainLine.includes("· Main"), mainLine);
+  assert.equal(
+    mainLine.includes("("),
+    false,
+    `no model segment without ctx.model: ${mainLine}`,
+  );
+});
+
+test("worker session without ctx model or thinking publishes no model keys", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx } = makeCtx("rpc", true);
+
+  wireSession(pi, { ...fakeTimers() });
+  await triggerSessionStart(pi, ctx);
+  await emit(
+    pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "bash" },
+    ctx,
+  );
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  const parsed = JSON.parse(fs.readFileSync(snapshotFile, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal("model" in parsed, false);
+  assert.equal("thinkingLevel" in parsed, false);
+
+  await emit(pi, "agent_end", { type: "agent_end" }, ctx);
+});
