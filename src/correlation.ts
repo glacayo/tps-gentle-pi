@@ -41,8 +41,6 @@ type UnknownRecord = Record<string, unknown>;
 export interface CorrelatedWorker extends WorkerRow {
   /** Matched task id; only present under the deterministic Regime A join. */
   taskId?: string;
-  /** Matched task label (e.g. "explore auth"); only present under Regime A. */
-  label?: string;
 }
 
 /** Tracks the arguments of a `subagent_run` tool call until its result arrives. */
@@ -372,8 +370,10 @@ export class CorrelationEngine {
 
   /**
    * Joins live worker snapshots to tracked tasks. Exactly one worker and one
-   * active task yields the deterministic Regime A enrichment; every other shape
-   * yields honest Regime B fallback rows with identity omitted.
+   * active task yields the deterministic Regime A enrichment (label + raw agent
+   * badge); every other shape yields honest Regime B fallback rows with identity
+   * omitted. The worker's own `thinkingLevel` is a verified runtime fact and is
+   * carried in both regimes.
    */
   correlate(workers: WorkerSnapshot[]): CorrelatedWorker[] {
     const active = this.activeTasks();
@@ -389,6 +389,12 @@ export class CorrelationEngine {
         tokens: snapshot.totalTokens,
         model: snapshot.model,
       };
+
+      const thinking =
+        snapshot.thinkingLevel === undefined
+          ? ""
+          : sanitizeText(snapshot.thinkingLevel);
+      if (thinking !== "") row.thinkingLevel = thinking;
 
       if (matched !== undefined) {
         const badge = sanitizeText(matched.agent);

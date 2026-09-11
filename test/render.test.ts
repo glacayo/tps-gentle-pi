@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 
 import {
   breakpointFor,
+  phaseIcon,
   renderMainRow,
   renderPanel,
   renderSubagentRow,
 } from "../src/render.ts";
 import { formatGauge, formatSparkline } from "../src/graphics.ts";
-import { stripAnsi } from "../src/format.ts";
+import { ANSI_MUTED, ANSI_RESET, stripAnsi } from "../src/format.ts";
 
 /** Visible (ANSI-stripped) text for presence/absence assertions. */
 const vis = (line: string): string => stripAnsi(line);
@@ -23,12 +24,15 @@ const MAIN = {
 
 const SCOUT = {
   badge: "scout",
+  label: "explore auth",
   tps: 24.1,
   phase: "tool",
   activeTool: "read",
   tokens: 1400,
   model: "claude-3-5-haiku",
 };
+
+const TRACK = "·";
 
 // ---------------------------------------------------------------------------
 // Responsive breakpoint classification
@@ -48,11 +52,189 @@ test("breakpointFor clamps sub-minimum widths to the 60-column floor", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Per-row anatomy: phase icon, name, badge, model
+// ---------------------------------------------------------------------------
+
+test("phase icons mark streaming, tool, complete, and idle phases", () => {
+  assert.equal(phaseIcon("streaming"), "⠴");
+  assert.equal(phaseIcon("tool"), "◇");
+  assert.equal(phaseIcon("complete"), "✓");
+  assert.equal(phaseIcon("waiting"), "·");
+  assert.equal(phaseIcon(undefined), "·");
+  assert.equal(phaseIcon("bogus"), "·");
+});
+
+test("each phase renders its icon ahead of the row identity", () => {
+  const base = { tps: 5, tokens: 0 };
+  assert.ok(
+    renderSubagentRow({ ...base, phase: "streaming" }, true, 160).startsWith(
+      "└─ ⠴ subagent",
+    ),
+  );
+  assert.ok(
+    renderSubagentRow({ ...base, phase: "complete" }, true, 160).startsWith(
+      "└─ ✓ subagent",
+    ),
+  );
+  assert.ok(
+    renderSubagentRow({ ...base, phase: "waiting" }, true, 160).startsWith(
+      "└─ · subagent",
+    ),
+  );
+  assert.ok(
+    renderSubagentRow(base, true, 160).startsWith("└─ · subagent"),
+    "absent phase renders the idle icon",
+  );
+  assert.ok(
+    renderMainRow({ ...MAIN, phase: "streaming" }, 160).startsWith("⠴ Main"),
+  );
+});
+
+test("the correlated task label is the row name, truncated to 24 visible chars", () => {
+  const long = renderSubagentRow(
+    { ...SCOUT, label: "x".repeat(40) },
+    false,
+    200,
+  );
+  assert.ok(vis(long).includes(`◇ ${"x".repeat(24)}`), "24-char name kept");
+  assert.ok(!vis(long).includes("x".repeat(25)), "25th char truncated");
+});
+
+test("the raw agent badge is a separate dimmed segment, never the row name", () => {
+  const line = renderSubagentRow({ ...SCOUT }, false, 160);
+  assert.ok(vis(line).startsWith("├─ ◇ explore auth"), "label is the name");
+  assert.ok(
+    line.includes(`${ANSI_MUTED}scout${ANSI_RESET}`),
+    "badge is a dimmed segment",
+  );
+});
+
+test("a badge without a correlated label still falls back to the honest name", () => {
+  const line = renderSubagentRow(
+    { badge: "scout", tps: 5, phase: "streaming", tokens: 0 },
+    false,
+    160,
+  );
+  assert.ok(vis(line).startsWith("├─ ⠴ subagent"), "badge is not the name");
+  assert.ok(
+    vis(line).includes("scout"),
+    "badge still renders as its own segment",
+  );
+});
+
+test("the badge segment is hidden on narrow layouts and absent without correlation", () => {
+  assert.ok(!vis(renderSubagentRow({ ...SCOUT }, false, 60)).includes("scout"));
+
+  const uncorrelated = renderSubagentRow(
+    { tps: 5, phase: "streaming", tokens: 0, pid: 4242 },
+    false,
+    160,
+  );
+  assert.ok(!vis(uncorrelated).includes("scout"), "no fabricated badge");
+  assert.ok(!uncorrelated.includes(ANSI_MUTED), "no dimmed badge segment");
+});
+
+test("wide rows render model:thinking and plain model without a thinking level", () => {
+  const main = renderMainRow({ ...MAIN, thinkingLevel: "high" }, 160);
+  assert.ok(vis(main).includes("(claude-3-7-sonnet:high)"));
+  assert.ok(
+    vis(renderMainRow({ ...MAIN }, 160)).includes("(claude-3-7-sonnet)"),
+  );
+
+  const sub = renderSubagentRow({ ...SCOUT, thinkingLevel: "low" }, false, 160);
+  assert.ok(vis(sub).includes("(claude-3-5-haiku:low)"));
+  assert.ok(
+    vis(renderSubagentRow({ ...SCOUT }, false, 160)).includes(
+      "(claude-3-5-haiku)",
+    ),
+  );
+
+  const standard = renderMainRow({ ...MAIN, thinkingLevel: "high" }, 100);
+  assert.ok(!vis(standard).includes("claude-3-7-sonnet"));
+});
+
+// ---------------------------------------------------------------------------
+// Per-row anatomy: token totals
+// ---------------------------------------------------------------------------
+
+test("main row shows the session token total on standard and wide only", () => {
+  const wide = vis(renderMainRow({ ...MAIN, totalTokens: 12345 }, 160));
+  assert.ok(wide.includes("· 12.3k tok"));
+  const standard = vis(renderMainRow({ ...MAIN, totalTokens: 12345 }, 100));
+  assert.ok(standard.includes("· 12.3k tok"));
+  const narrow = vis(renderMainRow({ ...MAIN, totalTokens: 12345 }, 60));
+  assert.ok(!narrow.includes("12.3k tok"));
+});
+
+test("main row omits the token segment when the tracker has no total", () => {
+  assert.ok(!vis(renderMainRow({ ...MAIN }, 160)).includes("  · "));
+  assert.ok(
+    vis(renderMainRow({ ...MAIN, totalTokens: 0 }, 160)).includes("  · 0 tok"),
+  );
+});
+
+test("subagent row shows its token total on standard and wide only", () => {
+  assert.ok(
+    vis(renderSubagentRow({ ...SCOUT }, false, 160)).includes("· 1.4k tok"),
+  );
+  assert.ok(
+    vis(renderSubagentRow({ ...SCOUT }, false, 100)).includes("· 1.4k tok"),
+  );
+  assert.ok(
+    !vis(renderSubagentRow({ ...SCOUT }, false, 60)).includes("1.4k tok"),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Relative gauge fill
+// ---------------------------------------------------------------------------
+
+test("relative gauge scales every row against the panel's live maximum", () => {
+  const stats = { ...MAIN, tps: 40, sparkline: [] };
+  const rows = [
+    { tps: 80, phase: "streaming", tokens: 0 },
+    { tps: 40, phase: "streaming", tokens: 0 },
+  ];
+  const lines = renderPanel(stats, rows, 160);
+
+  assert.ok(lines[0].includes("█".repeat(8) + TRACK.repeat(8)), "main 40/80");
+  assert.ok(lines[1].includes("█".repeat(16)), "worker 80/80 is full");
+  assert.ok(lines[2].includes("█".repeat(8) + TRACK.repeat(8)), "worker 40/80");
+});
+
+test("an all-idle panel renders empty gauges instead of dividing by zero", () => {
+  const stats = { ...MAIN, tps: 0, sparkline: [] };
+  const rows = [{ tps: 0, phase: "waiting", tokens: 0 }];
+  const lines = renderPanel(stats, rows, 160);
+  assert.ok(lines[0].includes(TRACK.repeat(16)));
+  assert.ok(lines[1].includes(TRACK.repeat(16)));
+});
+
+test("non-finite rates never produce a non-empty gauge", () => {
+  const lines = renderPanel(
+    { ...MAIN, tps: NaN, sparkline: [] },
+    [{ tps: Number.POSITIVE_INFINITY, phase: "streaming", tokens: 0 }],
+    160,
+  );
+  assert.ok(lines[0].includes(TRACK.repeat(16)));
+  assert.ok(lines[1].includes(TRACK.repeat(16)));
+});
+
+test("direct row renders keep the absolute gauge scale by default", () => {
+  const line = renderMainRow({ ...MAIN, tps: 75, sparkline: [] }, 160);
+  assert.ok(
+    line.includes(formatGauge(75, 16)),
+    "75/150 is half on the default scale",
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Main-agent row
 // ---------------------------------------------------------------------------
 
 test("wide main row renders gauge + rate + sparkline + μ + p95 + model", () => {
   const line = renderMainRow(MAIN, 160);
+  assert.ok(line.startsWith("· Main"), "idle main identity");
   assert.ok(line.includes(formatGauge(42.5, 16)), "16-cell gauge");
   assert.ok(line.includes(formatSparkline(MAIN.sparkline)), "sparkline");
   assert.ok(vis(line).includes("42.5 tok/s"), "live rate");
@@ -66,22 +248,22 @@ test("tool-phase main row renders the Main [tool: <name>] variant", () => {
     { ...MAIN, phase: "tool", activeTool: "bash" },
     160,
   );
-  assert.ok(line.startsWith("Main [tool: bash]"));
+  assert.ok(line.startsWith("◇ Main [tool: bash]"));
 });
 
 // ---------------------------------------------------------------------------
 // Subagent rows
 // ---------------------------------------------------------------------------
 
-test("badge bearer uses the tree prefix and shows phase/tool, tokens, model", () => {
+test("correlated subagent row uses the tree prefix and shows phase/tool, tokens, model", () => {
   const intermediate = renderSubagentRow({ ...SCOUT }, false, 160);
-  assert.ok(intermediate.startsWith("├─ scout"));
+  assert.ok(intermediate.startsWith("├─ ◇ explore auth"));
   assert.ok(vis(intermediate).includes("tool: read"));
-  assert.ok(vis(intermediate).includes("1.4k tok"));
+  assert.ok(vis(intermediate).includes("· 1.4k tok"));
   assert.ok(vis(intermediate).includes("(claude-3-5-haiku)"));
 
   const terminal = renderSubagentRow({ ...SCOUT }, true, 160);
-  assert.ok(terminal.startsWith("└─ scout"));
+  assert.ok(terminal.startsWith("└─ ◇ explore auth"));
 });
 
 test("honest fallback yields subagent · <pid> and bare subagent", () => {
@@ -90,7 +272,7 @@ test("honest fallback yields subagent · <pid> and bare subagent", () => {
     false,
     160,
   );
-  assert.ok(withPid.startsWith("├─ subagent · 4242"));
+  assert.ok(withPid.startsWith("├─ ⠴ subagent · 4242"));
   assert.ok(vis(withPid).includes("streaming"));
 
   const noPid = renderSubagentRow(
@@ -98,7 +280,7 @@ test("honest fallback yields subagent · <pid> and bare subagent", () => {
     true,
     160,
   );
-  assert.ok(noPid.startsWith("└─ subagent"));
+  assert.ok(noPid.startsWith("└─ · subagent"));
 });
 
 // ---------------------------------------------------------------------------
@@ -174,6 +356,13 @@ test("maximally long sanitized labels still clamp within 60 columns", () => {
     60,
   );
   assert.ok(stripAnsi(hostileBadge).length <= 60);
+
+  const hostileLabel = renderSubagentRow(
+    { label: "z".repeat(100), tps: 5, phase: "streaming", tokens: 0 },
+    false,
+    60,
+  );
+  assert.ok(stripAnsi(hostileLabel).length <= 60);
 
   const hostileTool = renderMainRow(
     { ...MAIN, phase: "tool", activeTool: "bash".repeat(40) },

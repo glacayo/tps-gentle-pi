@@ -3,7 +3,7 @@
 // `ctx.ui.setWidget`. Output depends only on explicit inputs (stats, rows,
 // theme, width); no ambient state, no I/O.
 
-import { formatGauge, formatSparkline } from "./graphics.ts";
+import { formatGauge, formatSparkline, GAUGE_MAX_TPS } from "./graphics.ts";
 import {
   ANSI_MUTED,
   ANSI_RESET,
@@ -24,8 +24,21 @@ export const NARROW_MIN_COLS = 60;
 export const MAIN_GAUGE_CELLS = 16;
 /** Gauge columns used in the narrow (compact) layout. */
 export const COMPACT_GAUGE_CELLS = 8;
+/** Maximum visible length of the correlated task label used as a row name. */
+export const ROW_NAME_MAX = 24;
+/** Maximum visible length of the raw correlated agent badge. */
+export const ROW_BADGE_MAX = 20;
 
 const SEP = "  ";
+
+/** Phase glyphs rendered ahead of the row identity. */
+const PHASE_ICONS: Record<string, string> = {
+  streaming: "⠴",
+  tool: "◇",
+  complete: "✓",
+};
+/** Glyph for `waiting`, an unknown phase, or no phase at all. */
+const IDLE_ICON = "·";
 
 export type PanelBreakpoint = "wide" | "standard" | "narrow";
 
@@ -37,24 +50,30 @@ export interface PanelStats {
   /** Recent completed-turn TPS history, oldest first. */
   sparkline: number[];
   model?: string;
-  /** Reserved for the tracker; not drawn in the panel. */
+  /** Reasoning effort drawn beside the model on wide layouts. */
   thinkingLevel?: string;
   /** `"tool"` activates the tool-variant prefix. */
   phase?: string;
   activeTool?: string;
+  /** Session cumulative output tokens; drawn as `· N tok` on standard and wide. */
+  totalTokens?: number;
 }
 
 /** One subagent worker row's metrics and (optionally) correlated identity. */
 export interface WorkerRow {
-  /** Worker PID used for the honest fallback label when no badge is correlated. */
+  /** Worker PID used for the honest fallback label when no label is correlated. */
   pid?: number;
-  /** Correlated agent badge (e.g. "scout"); absent means honest fallback. */
+  /** Raw correlated agent name (e.g. `scout`); drawn as a separate dimmed badge. */
   badge?: string;
+  /** Correlated task label; when present it is the row's name. */
+  label?: string;
   tps: number;
   phase?: string;
   activeTool?: string;
   tokens: number;
   model?: string;
+  /** Reasoning effort drawn beside the model on wide layouts. */
+  thinkingLevel?: string;
 }
 
 /** Minimal theme: color used to dim model labels. */
@@ -136,14 +155,50 @@ function mainLabel(stats: PanelStats): string {
   return "Main";
 }
 
-/** Correlated badge, or the honest `subagent` / `subagent · <pid>` fallback. */
+/**
+ * Phase glyph shown ahead of a row identity: `⠴` streaming, `◇` tool, `✓`
+ * complete, and `·` for waiting, an unknown phase, or no phase at all.
+ */
+export function phaseIcon(phase?: string): string {
+  return PHASE_ICONS[phase ?? ""] ?? IDLE_ICON;
+}
+
+/**
+ * Row name: the correlated task label when present, otherwise the honest
+ * `subagent · <pid>` / `subagent` fallback. The raw agent badge is never used
+ * as a name.
+ */
 function workerName(row: WorkerRow): string {
-  const badge = sanitizeText(row.badge);
-  if (badge !== "") return badge;
+  if (row.label !== undefined) {
+    const label = truncateVisible(sanitizeText(row.label), ROW_NAME_MAX);
+    if (label !== "") return label;
+  }
   if (Number.isInteger(row.pid) && (row.pid as number) > 0) {
     return `subagent · ${row.pid}`;
   }
   return "subagent";
+}
+
+/** Separate dimmed badge segment for the raw correlated agent name. */
+function badgeSegment(row: WorkerRow, theme?: PanelTheme): Segment | null {
+  if (row.badge === undefined) return null;
+  const badge = truncateVisible(sanitizeText(row.badge), ROW_BADGE_MAX);
+  if (badge === "") return null;
+  return segment(dim(badge, theme));
+}
+
+/** Dimmed `model` / `model:thinking` segment; absent when no model is known. */
+function modelSegment(
+  model: string | undefined,
+  thinkingLevel: string | undefined,
+  theme?: PanelTheme,
+): Segment | null {
+  const name = model === undefined ? "" : sanitizeText(model);
+  if (name === "") return null;
+  const thinking =
+    thinkingLevel === undefined ? "" : sanitizeText(thinkingLevel);
+  const text = thinking === "" ? name : `${name}:${thinking}`;
+  return segment(dim(`(${text})`, theme));
 }
 
 /** Phase/tool state text for a worker row. */
@@ -158,60 +213,90 @@ function workerState(row: WorkerRow): string {
 }
 
 /**
- * Renders the main-agent meter row. Wide includes the model; standard hides the
- * model; narrow additionally hides μ/p95 and shrinks the gauge to 8 columns.
+ * Largest live TPS across the main row and every worker row; the relative gauge
+ * ceiling. Non-finite and negative rates are ignored, and an all-idle panel
+ * yields 0 (an empty gauge for every row).
+ */
+function maxLiveTps(stats: PanelStats, rows: WorkerRow[]): number {
+  let max = Number.isFinite(stats.tps) && stats.tps > 0 ? stats.tps : 0;
+  for (const row of rows) {
+    if (Number.isFinite(row.tps) && row.tps > max) max = row.tps;
+  }
+  return max;
+}
+
+/**
+ * Renders the main-agent meter row. Wide includes the model (and thinking level)
+ * and the token total; standard hides the model and keeps μ/p95 and tokens;
+ * narrow additionally hides μ/p95/tokens and shrinks the gauge to 8 columns.
+ * `gaugeMax` defaults to the absolute scale; `renderPanel` passes the panel's
+ * live maximum for a relative fill.
  */
 export function renderMainRow(
   stats: PanelStats,
   width: number,
   theme?: PanelTheme,
+  gaugeMax = GAUGE_MAX_TPS,
 ): string {
   const cols = clampWidth(width);
   const bp = breakpointFor(cols);
   const cells = bp === "narrow" ? COMPACT_GAUGE_CELLS : MAIN_GAUGE_CELLS;
 
-  const segments = [
-    segment(mainLabel(stats)),
-    segment(formatGauge(stats.tps, cells)),
-    segment(formatRate(stats.tps)),
-    segment(formatSparkline(stats.sparkline ?? [])),
+  const segments: Segment[] = [
+    segment(`${phaseIcon(stats.phase)} ${mainLabel(stats)}`),
   ];
+  if (bp === "wide") {
+    const model = modelSegment(stats.model, stats.thinkingLevel, theme);
+    if (model !== null) segments.push(model);
+  }
+  segments.push(segment(formatGauge(stats.tps, cells, gaugeMax)));
+  segments.push(segment(formatRate(stats.tps)));
+  segments.push(segment(formatSparkline(stats.sparkline ?? [])));
   if (bp !== "narrow") {
     segments.push(segment(`μ ${fmt1(stats.mean)}`));
     segments.push(segment(`p95 ${fmt1(stats.p95)}`));
-  }
-  if (bp === "wide" && stats.model) {
-    segments.push(segment(dim(`(${sanitizeText(stats.model)})`, theme)));
+    if (Number.isFinite(stats.totalTokens)) {
+      segments.push(segment(`· ${formatTokens(stats.totalTokens as number)}`));
+    }
   }
 
   return compose(segments, cols);
 }
 
 /**
- * Renders one subagent row. Wide includes tokens and model; standard includes
- * tokens only; narrow keeps identity + gauge + rate + state with an 8-cell gauge.
+ * Renders one subagent row. Wide includes the badge, tokens, and model (with
+ * thinking level); standard includes the badge and tokens only; narrow keeps
+ * identity + gauge + rate + state with an 8-cell gauge and no badge.
  */
 export function renderSubagentRow(
   row: WorkerRow,
   isLast: boolean,
   width: number,
   theme?: PanelTheme,
+  gaugeMax = GAUGE_MAX_TPS,
 ): string {
   const cols = clampWidth(width);
   const bp = breakpointFor(cols);
   const cells = bp === "narrow" ? COMPACT_GAUGE_CELLS : MAIN_GAUGE_CELLS;
 
-  const segments = [
-    segment(`${isLast ? "└─" : "├─"} ${workerName(row)}`),
-    segment(formatGauge(row.tps, cells)),
-    segment(formatRate(row.tps)),
-    segment(workerState(row)),
+  const segments: Segment[] = [
+    segment(
+      `${isLast ? "└─" : "├─"} ${phaseIcon(row.phase)} ${workerName(row)}`,
+    ),
   ];
   if (bp !== "narrow") {
-    segments.push(segment(`(${formatTokens(row.tokens)})`));
+    const badge = badgeSegment(row, theme);
+    if (badge !== null) segments.push(badge);
   }
-  if (bp === "wide" && row.model) {
-    segments.push(segment(dim(`(${sanitizeText(row.model)})`, theme)));
+  if (bp === "wide") {
+    const model = modelSegment(row.model, row.thinkingLevel, theme);
+    if (model !== null) segments.push(model);
+  }
+  segments.push(segment(formatGauge(row.tps, cells, gaugeMax)));
+  segments.push(segment(formatRate(row.tps)));
+  segments.push(segment(workerState(row)));
+  if (bp !== "narrow") {
+    segments.push(segment(`· ${formatTokens(row.tokens)}`));
   }
 
   return compose(segments, cols);
@@ -219,7 +304,9 @@ export function renderSubagentRow(
 
 /**
  * Composes the full panel: the main-agent row followed by one row per worker,
- * with `├─` prefixes for intermediate rows and `└─` for the terminal row.
+ * with `├─` prefixes for intermediate rows and `└─` for the terminal row. The
+ * relative gauge ceiling is computed once from every rendered row so each gauge
+ * shows its share of the panel's live maximum.
  */
 export function renderPanel(
   stats: PanelStats,
@@ -227,9 +314,12 @@ export function renderPanel(
   width: number,
   theme?: PanelTheme,
 ): string[] {
-  const lines = [renderMainRow(stats, width, theme)];
+  const gaugeMax = maxLiveTps(stats, rows);
+  const lines = [renderMainRow(stats, width, theme, gaugeMax)];
   for (let i = 0; i < rows.length; i++) {
-    lines.push(renderSubagentRow(rows[i], i === rows.length - 1, width, theme));
+    lines.push(
+      renderSubagentRow(rows[i], i === rows.length - 1, width, theme, gaugeMax),
+    );
   }
   return lines;
 }

@@ -57,6 +57,45 @@ test("formatGauge renders a narrow 8-cell gauge", () => {
 });
 
 // ---------------------------------------------------------------------------
+// formatGauge relative fill (explicit ceiling)
+// ---------------------------------------------------------------------------
+
+test("formatGauge fills relative to an explicit ceiling", () => {
+  assert.equal(formatGauge(80, 16, 80), "█".repeat(16));
+  assert.equal(formatGauge(40, 16, 80), "█".repeat(8) + TRACK.repeat(8));
+  assert.equal(formatGauge(0, 16, 80), TRACK.repeat(16));
+});
+
+test("formatGauge keeps sub-block precision against a relative ceiling", () => {
+  // 10/80 = 1/8 → exactly two full cells; 12/80 = 3/20 → 2 cells and a 3/8 sub-block.
+  assert.equal(formatGauge(10, 16, 80), "██" + TRACK.repeat(14));
+  assert.equal(formatGauge(12, 16, 80), "██▍" + TRACK.repeat(13));
+});
+
+test("formatGauge clamps rates above the relative ceiling to full", () => {
+  assert.equal(formatGauge(400, 16, 80), "█".repeat(16));
+  assert.equal(formatGauge(-5, 16, 80), TRACK.repeat(16));
+});
+
+test("formatGauge renders an empty gauge for a non-positive or non-finite ceiling", () => {
+  assert.equal(formatGauge(40, 16, 0), TRACK.repeat(16));
+  assert.equal(formatGauge(40, 16, -1), TRACK.repeat(16));
+  assert.equal(formatGauge(40, 16, NaN), TRACK.repeat(16));
+  assert.equal(formatGauge(40, 16, Number.POSITIVE_INFINITY), TRACK.repeat(16));
+  assert.equal(formatGauge(NaN, 8, 80), TRACK.repeat(8));
+});
+
+test("formatGauge defaults to the absolute scale when no ceiling is given", () => {
+  assert.equal(formatGauge(75, 16), formatGauge(75, 16, GAUGE_MAX_TPS));
+  assert.equal(formatGauge(75), "█".repeat(8) + TRACK.repeat(8));
+});
+
+test("relative gauge output is byte-identical across repeated renders", () => {
+  assert.equal(formatGauge(40, 16, 80), formatGauge(40, 16, 80));
+  assert.equal(formatGauge(12, 16, 80), formatGauge(12, 16, 80));
+});
+
+// ---------------------------------------------------------------------------
 // formatSparkline
 // ---------------------------------------------------------------------------
 

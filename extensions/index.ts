@@ -132,8 +132,10 @@ function parentPanelStats(tracker: EventTracker): PanelStats {
     p95: stats.p95,
     sparkline: stats.sparkline,
     model: snapshot.model,
+    thinkingLevel: snapshot.thinkingLevel,
     phase: snapshot.phase,
     activeTool: snapshot.activeTool,
+    totalTokens: snapshot.totalTokens,
   };
 }
 

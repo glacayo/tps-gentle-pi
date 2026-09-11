@@ -20,6 +20,7 @@ import {
 } from "../extensions/index.ts";
 import { readWorkerSnapshots } from "../src/channel-guard.ts";
 import { CorrelationEngine } from "../src/correlation.ts";
+import { formatTokens, stripAnsi } from "../src/format.ts";
 import { renderPanel } from "../src/render.ts";
 import { EventTracker } from "../src/tracker.ts";
 
@@ -494,8 +495,10 @@ test("render tick composes exactly the WU-3 panel from tracker and correlation s
     p95: stats.p95,
     sparkline: stats.sparkline,
     model: snap.model,
+    thinkingLevel: snap.thinkingLevel,
     phase: snap.phase,
     activeTool: snap.activeTool,
+    totalTokens: snap.totalTokens,
   };
   const expectedRows = new CorrelationEngine().correlate(
     readWorkerSnapshots(dir),
@@ -506,4 +509,21 @@ test("render tick composes exactly the WU-3 panel from tracker and correlation s
   assert.equal(last.id, WIDGET_ID);
   assert.deepEqual(last.lines, expected);
   assert.deepEqual(last.options, { placement: "aboveEditor" });
+
+  // The wired main row carries the new anatomy: phase icon plus session tokens.
+  const mainLine = stripAnsi((last.lines as string[])[0]);
+  assert.ok(mainLine.startsWith("◇ Main [tool: read]"), mainLine);
+  assert.ok(
+    mainLine.includes(`· ${formatTokens(snap.totalTokens)}`),
+    "main row shows the session token total",
+  );
+
+  // The uncorrelated worker row stays honest: fallback name, no badge, metrics kept.
+  const workerLine = stripAnsi((last.lines as string[])[1]);
+  assert.ok(workerLine.startsWith("└─ ⠴ subagent · "), workerLine);
+  assert.ok(workerLine.includes("(claude-3-5-haiku)"), "model still shown");
+  assert.ok(
+    workerLine.includes("· 1.4k tok"),
+    "worker token total still shown",
+  );
 });

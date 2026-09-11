@@ -242,6 +242,50 @@ test("Regime A row carries the worker's verified runtime facts", () => {
   assert.equal(row.model, "claude-3-5-haiku");
 });
 
+test("Regime A row carries the label, the raw agent badge, and the thinking level", () => {
+  const engine = new CorrelationEngine();
+  engine.handleToolCall(
+    runCall("c1", { agent: "scout", label: "explore auth" }),
+  );
+  engine.handleToolResult(runResult("c1", { taskId: "t1", status: "running" }));
+
+  const [row] = engine.correlate([snapshot({ thinkingLevel: "high" })]);
+  assert.equal(row.label, "explore auth");
+  assert.equal(row.badge, "scout");
+  assert.equal(row.thinkingLevel, "high");
+});
+
+test("Regime B keeps the thinking level but never invents a label or badge", () => {
+  const engine = new CorrelationEngine();
+  engine.handleToolCall(runCall("c1", { agent: "scout" }));
+  engine.handleToolResult(runResult("c1", { taskId: "t1", status: "running" }));
+  engine.handleToolCall(runCall("c2", { agent: "architect" }));
+  engine.handleToolResult(
+    runResult("c2", { taskId: "t2", agent: "architect", status: "running" }),
+  );
+
+  const rows = engine.correlate([
+    snapshot({ thinkingLevel: "low" }),
+    snapshot({ thinkingLevel: "medium" }),
+  ]);
+  assert.equal(rows[0].thinkingLevel, "low");
+  assert.equal(rows[1].thinkingLevel, "medium");
+  for (const row of rows) {
+    assert.equal(row.label, undefined);
+    assert.equal(row.badge, undefined);
+  }
+});
+
+test("an absent or hostile thinking level never reaches the row", () => {
+  const noLevel = new CorrelationEngine().correlate([snapshot()])[0];
+  assert.equal(noLevel.thinkingLevel, undefined);
+
+  const [hostile] = new CorrelationEngine().correlate([
+    snapshot({ thinkingLevel: "hi\u001b[31mgh" }),
+  ]);
+  assert.equal(hostile.thinkingLevel, "high");
+});
+
 test("Regime B: two concurrent workers and tasks render metrics-only without guessed identity", () => {
   const engine = new CorrelationEngine();
   engine.handleToolCall(runCall("c1", { agent: "scout" }));
