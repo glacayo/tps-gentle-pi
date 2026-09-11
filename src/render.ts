@@ -204,9 +204,9 @@ function workerState(row: WorkerRow): string {
 }
 
 /**
- * Largest live TPS across the main row and every worker row; the relative gauge
- * ceiling. Non-finite and negative rates are ignored, and an all-idle panel
- * yields 0 (an empty gauge for every row).
+ * Largest live TPS across the main row and every worker row. Non-finite and
+ * negative rates are ignored, and an all-idle panel yields 0. `renderPanel`
+ * raises this to at least `GAUGE_MAX_TPS` to form the hybrid gauge ceiling.
  */
 function maxLiveTps(stats: PanelStats, rows: WorkerRow[]): number {
  let max = Number.isFinite(stats.tps) && stats.tps > 0 ? stats.tps : 0;
@@ -296,8 +296,8 @@ export function renderHeader(
  * hides both. The session aggregates (sparkline, μ, p95) live on the header line,
  * not here.
  *
- * `gaugeMax` defaults to the absolute scale; `renderPanel` passes the panel's
- * live maximum for a relative fill.
+ * `gaugeMax` defaults to the absolute scale; `renderPanel` passes the hybrid
+ * ceiling (the larger of the panel's live maximum and the absolute scale).
  */
 export function renderMainRow(
  stats: PanelStats,
@@ -364,8 +364,10 @@ export function renderSubagentRow(
 /**
  * Composes the full panel: the session header line, the main-agent row, then one
  * row per worker, with `├─` prefixes for intermediate rows and `└─` for the
- * terminal row. The relative gauge ceiling is computed once from every rendered
- * row so each gauge shows its share of the panel's live maximum.
+ * terminal row. The gauge ceiling is hybrid and computed once from every rendered
+ * row: `max(fastest live row, GAUGE_MAX_TPS)`. Below 150 tok/s every bar is an
+ * absolute magnitude reading on the fixed scale; once one participant exceeds it,
+ * the fastest row fills and the rest compare against that live maximum.
  */
 export function renderPanel(
  stats: PanelStats,
@@ -373,7 +375,7 @@ export function renderPanel(
  width: number,
  theme?: PanelTheme,
 ): string[] {
- const gaugeMax = maxLiveTps(stats, rows);
+ const gaugeMax = Math.max(maxLiveTps(stats, rows), GAUGE_MAX_TPS);
  const lines = [
   renderHeader(stats, rows, width, theme),
   renderMainRow(stats, width, theme, gaugeMax),

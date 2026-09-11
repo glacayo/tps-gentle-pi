@@ -32,20 +32,25 @@ The panel sits above the editor while a response streams. It has two parts: a
 
 ```text
 Throughput ▂▃▄▅▄▅▆▆▇▇██  58.0 tok/s  μ 38.2  p95 51.0  3 active  1 streaming  84.6 tok/s total  14.6k tok
-· Main  (claude-3-7-sonnet:high)  ████████████████  42.5 tok/s  · 12.3k tok
-├─ ◇ explore auth  scout  (claude-3-5-haiku)  █████████▏······  24.1 tok/s  tool: read  · 1.4k tok
-└─ ⠴ write tests  worker  (claude-3-5-haiku:low)  ██████▊·········  18.0 tok/s  streaming  · 820 tok
+· Main  (anthropic/claude-3-7-sonnet:high)  ████▌···········  42.5 tok/s  · 12.3k tok
+├─ ◇ scout  (anthropic/claude-3-5-haiku)  ██▋·············  24.1 tok/s  tool: read  · 1.4k tok
+└─ ⠴ worker  (anthropic/claude-3-5-haiku:low)  █▉··············  18.0 tok/s  streaming  · 820 tok
 ```
 
 | Part | Fields, left to right. Trailing fields drop on narrow terminals. |
 | --- | --- |
 | Header | `Throughput` + 12-turn sparkline, last `tok/s`, `μ`, `p95`, `N active`, `N streaming`, panel `tok/s total`, total `tok` |
-| Main row | phase icon, `Main` (or `Main [tool: x]`), `model:thinking` on wide, relative gauge, `tok/s`, `· N tok` |
-| Subagent row | tree glyph + phase icon, correlated label or honest `subagent · <pid>`, dimmed badge, `model:thinking` on wide, relative gauge, `tok/s`, phase/tool state, `· N tok` |
+| Main row | phase icon, `Main` (or `Main [tool: x]`), `provider/id:thinking` at standard and wide, hybrid gauge, `tok/s`, `· N tok` at standard and wide |
+| Subagent row | tree glyph + phase icon, raw correlated agent name or honest `subagent` / `subagent · <pid>` fallback, `provider/id:thinking` at standard and wide, hybrid gauge, `tok/s`, phase/tool state, `· N tok` at standard and wide |
 
-The gauge is **relative**: every row fills against the fastest live participant in
-the panel, so a quiet panel still shows its shape. The header aggregates derive
-only from the tracker and the live rows — nothing is fabricated.
+The gauge is **hybrid**: the denominator is `max(fastest live row, 150)` tok/s. While
+every participant stays below 150 tok/s, each bar is an absolute magnitude reading on
+the fixed 150 tok/s scale, so a quiet panel never looks busy. As soon as one
+participant exceeds 150 tok/s, the fastest row fills the bar and the rest compare
+against it, so the panel keeps showing relative shape at high speed. Task titles are
+intentionally never displayed: a worker row is named by the raw correlated agent
+name, or by the honest fallback when correlation is ambiguous. The header aggregates
+derive only from the tracker and the live rows — nothing is fabricated.
 
 > Screenshots below are from the previous release and will be regenerated.
 
@@ -65,7 +70,7 @@ only from the tracker and the live rows — nothing is fabricated.
 | Main meter | Live TPS from output deltas since the first delta, preferring provider-reported usage and falling back to a `ceil(chars / 4)` estimate. Authoritative usage is recorded at message end and pushed into the sparkline, mean, and P² p95. |
 | Roles | `session_start` selects `parent-tui` (TUI + no child marker), `gentle-worker` (child marker + inherited channel), or `headless-noop`. |
 | Subagent channel | The parent creates one private, unpredictable session directory; each worker publishes a throttled, atomic, schema-validated snapshot. The parent aggregates only live snapshots. |
-| Identity | A correlated badge is shown only when exactly one worker and one active task match. Otherwise the row uses an honest fallback (`subagent` / `subagent · <pid>`) and never guesses. |
+| Identity | The row name is the raw correlated agent name (`agent`), shown only when exactly one worker and one active task match. Otherwise the row uses an honest fallback (`subagent` / `subagent · <pid>`) and never guesses. Task titles are never rendered. |
 
 ## Installation and child visibility
 

@@ -9,7 +9,11 @@ import {
   renderPanel,
   renderSubagentRow,
 } from "../src/render.ts";
-import { formatGauge, formatSparkline } from "../src/graphics.ts";
+import {
+  formatGauge,
+  formatSparkline,
+  GAUGE_MAX_TPS,
+} from "../src/graphics.ts";
 import { ANSI_MUTED, ANSI_RESET, stripAnsi } from "../src/format.ts";
 
 /** Visible (ANSI-stripped) text for presence/absence assertions. */
@@ -372,18 +376,67 @@ test("subagent row shows its token total on standard and wide only", () => {
 // Relative gauge fill
 // ---------------------------------------------------------------------------
 
-test("relative gauge scales every row against the panel's live maximum", () => {
+test("low live rates fill proportionally against the absolute 150 tok/s scale", () => {
   const stats = { ...MAIN, tps: 40, sparkline: [] };
   const rows = [
-    { tps: 80, phase: "streaming", tokens: 0 },
+    { tps: 20, phase: "streaming", tokens: 0 },
     { tps: 40, phase: "streaming", tokens: 0 },
   ];
   const lines = renderPanel(stats, rows, 160);
 
-  // lines[0] is the header; the gauges live on the main row and the worker rows.
-  assert.ok(lines[1].includes("█".repeat(8) + TRACK.repeat(8)), "main 40/80");
-  assert.ok(lines[2].includes("█".repeat(16)), "worker 80/80 is full");
-  assert.ok(lines[3].includes("█".repeat(8) + TRACK.repeat(8)), "worker 40/80");
+  // Every rate is below 150, so the ceiling stays at the absolute scale and no
+  // bar is full: the panel reads as absolute magnitude, not relative shape.
+  assert.ok(
+    lines[1].includes(formatGauge(40, 16, GAUGE_MAX_TPS)),
+    "main 40/150",
+  );
+  assert.ok(
+    lines[2].includes(formatGauge(20, 16, GAUGE_MAX_TPS)),
+    "worker 20/150",
+  );
+  assert.ok(
+    lines[3].includes(formatGauge(40, 16, GAUGE_MAX_TPS)),
+    "worker 40/150",
+  );
+  for (const line of lines.slice(1)) {
+    assert.ok(
+      !line.includes("█".repeat(16)),
+      `no bar fills below 150 tok/s: ${vis(line)}`,
+    );
+  }
+});
+
+test("the fastest live rate fills and the rest compare relatively above 150 tok/s", () => {
+  const stats = { ...MAIN, tps: 150, sparkline: [] };
+  const rows = [
+    { tps: 300, phase: "streaming", tokens: 0 },
+    { tps: 150, phase: "streaming", tokens: 0 },
+  ];
+  const lines = renderPanel(stats, rows, 160);
+
+  // One row exceeds 150, so the hybrid ceiling is the live maximum (300): the
+  // fastest row fills and the other two rows show their share of it.
+  assert.ok(lines[2].includes("█".repeat(16)), "worker 300/300 is full");
+  assert.ok(
+    lines[1].includes(formatGauge(150, 16, 300)),
+    "main 150/300 is half",
+  );
+  assert.ok(
+    lines[3].includes(formatGauge(150, 16, 300)),
+    "worker 150/300 is half",
+  );
+});
+
+test("the main rate joins the hybrid ceiling when it is the fastest row", () => {
+  const stats = { ...MAIN, tps: 300, sparkline: [] };
+  const rows = [{ tps: 150, phase: "streaming", tokens: 0 }];
+  const lines = renderPanel(stats, rows, 160);
+
+  assert.ok(lines[1].includes("█".repeat(16)), "main 300/300 is full");
+  assert.ok(
+    lines[2].includes(formatGauge(150, 16, 300)),
+    "worker 150/300 is half",
+  );
 });
 
 test("an all-idle panel renders empty gauges instead of dividing by zero", () => {
