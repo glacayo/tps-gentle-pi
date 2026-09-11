@@ -10,8 +10,9 @@
 // live worker snapshots using exactly two regimes:
 //
 //   * Regime A — exactly one live worker AND exactly one active task: the row
-//     is enriched with the task's observed `agent` badge and `label` (safe
-//     because only one delegated worker exists in the whole session).
+//     is named with the task's observed `agent` badge (safe because only one
+//     delegated worker exists in the whole session). The task `label` stays in
+//     the engine and is never rendered.
 //   * Regime B — two or more workers, or a worker/task count mismatch, or a
 //     worker without a registered task: every row renders only verified worker
 //     runtime facts with a neutral `subagent` / `subagent · <pid>` label. The
@@ -370,8 +371,9 @@ export class CorrelationEngine {
 
   /**
    * Joins live worker snapshots to tracked tasks. Exactly one worker and one
-   * active task yields the deterministic Regime A enrichment (label + raw agent
-   * badge); every other shape yields honest Regime B fallback rows with identity
+   * active task yields the deterministic Regime A enrichment (the raw agent
+   * badge becomes the row name; the task label is never copied into the row);
+   * every other shape yields honest Regime B fallback rows with identity
    * omitted. The worker's own `thinkingLevel` is a verified runtime fact and is
    * carried in both regimes.
    */
@@ -399,9 +401,8 @@ export class CorrelationEngine {
       if (matched !== undefined) {
         const badge = sanitizeText(matched.agent);
         if (badge !== "") row.badge = badge;
-        const label =
-          matched.label === undefined ? undefined : sanitizeText(matched.label);
-        if (label !== undefined && label !== "") row.label = label;
+        // The tracked task `label` stays in the engine; the render row never
+        // carries task text.
         row.taskId = matched.taskId;
       }
 

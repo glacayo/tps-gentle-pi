@@ -25,12 +25,16 @@ const MAIN = {
 
 const SCOUT = {
   badge: "scout",
-  label: "explore auth",
   tps: 24.1,
   phase: "tool",
   activeTool: "read",
   tokens: 1400,
   model: "claude-3-5-haiku",
+};
+
+/** The removed render-contract field, kept to prove task text is never drawn. */
+type StaleLabelRow = Parameters<typeof renderSubagentRow>[0] & {
+  label?: string;
 };
 
 const TRACK = "·";
@@ -154,7 +158,7 @@ test("header drops trailing segments instead of overflowing at each breakpoint",
   );
 
   const rows = [
-    { label: "x".repeat(60), tps: 58, phase: "streaming", tokens: 3200 },
+    { badge: "x".repeat(60), tps: 58, phase: "streaming", tokens: 3200 },
   ];
   for (const cols of [60, 80, 120, 160]) {
     const header = renderHeader(MAIN, rows, cols);
@@ -204,51 +208,65 @@ test("each phase renders its icon ahead of the row identity", () => {
   );
 });
 
-test("the correlated task label is the row name, truncated to 24 visible chars", () => {
+test("the correlated agent badge is the row name, truncated to 20 visible chars", () => {
   const long = renderSubagentRow(
-    { ...SCOUT, label: "x".repeat(40) },
+    { ...SCOUT, badge: "x".repeat(40) },
     false,
     200,
   );
-  assert.ok(vis(long).includes(`◇ ${"x".repeat(24)}`), "24-char name kept");
-  assert.ok(!vis(long).includes("x".repeat(25)), "25th char truncated");
+  assert.ok(vis(long).includes(`◇ ${"x".repeat(20)}`), "20-char name kept");
+  assert.ok(!vis(long).includes("x".repeat(21)), "21st char truncated");
 });
 
-test("the raw agent badge is a separate dimmed segment, never the row name", () => {
+test("the agent badge is the row identity, never a separate segment", () => {
   const line = renderSubagentRow({ ...SCOUT }, false, 160);
-  assert.ok(vis(line).startsWith("├─ ◇ explore auth"), "label is the name");
+  assert.ok(vis(line).startsWith("├─ ◇ scout"), "badge is the name");
   assert.ok(
-    line.includes(`${ANSI_MUTED}scout${ANSI_RESET}`),
-    "badge is a dimmed segment",
+    !line.includes(`${ANSI_MUTED}scout${ANSI_RESET}`),
+    "no separate dimmed badge segment",
   );
 });
 
-test("a badge without a correlated label still falls back to the honest name", () => {
+test("a task label never reaches the rendered row at 60/80/120/160", () => {
+  const stale: StaleLabelRow = { ...SCOUT, label: "explore auth" };
+  for (const cols of [60, 80, 120, 160]) {
+    const line = renderSubagentRow(stale, false, cols);
+    assert.ok(
+      !vis(line).includes("explore auth"),
+      `task label leaked at ${cols}: ${vis(line)}`,
+    );
+  }
+});
+
+test("a row without a correlated badge falls back to the honest name", () => {
   const line = renderSubagentRow(
-    { badge: "scout", tps: 5, phase: "streaming", tokens: 0 },
+    { tps: 5, phase: "streaming", tokens: 0 },
     false,
     160,
   );
-  assert.ok(vis(line).startsWith("├─ ⠴ subagent"), "badge is not the name");
-  assert.ok(
-    vis(line).includes("scout"),
-    "badge still renders as its own segment",
-  );
+  assert.ok(vis(line).startsWith("├─ ⠴ subagent"), "no fabricated identity");
+  assert.ok(!line.includes(ANSI_MUTED), "no dimmed identity segment");
 });
 
-test("the badge segment is hidden on narrow layouts and absent without correlation", () => {
-  assert.ok(!vis(renderSubagentRow({ ...SCOUT }, false, 60)).includes("scout"));
+test("the badge identity renders at every breakpoint and is absent without correlation", () => {
+  assert.ok(
+    vis(renderSubagentRow({ ...SCOUT }, false, 60)).startsWith("├─ ◇ scout"),
+    "badge identity survives the narrow layout",
+  );
 
   const uncorrelated = renderSubagentRow(
     { tps: 5, phase: "streaming", tokens: 0, pid: 4242 },
     false,
     160,
   );
+  assert.ok(
+    vis(uncorrelated).startsWith("├─ ⠴ subagent · 4242"),
+    "honest fallback identity",
+  );
   assert.ok(!vis(uncorrelated).includes("scout"), "no fabricated badge");
-  assert.ok(!uncorrelated.includes(ANSI_MUTED), "no dimmed badge segment");
 });
 
-test("wide rows render model:thinking and plain model without a thinking level", () => {
+test("standard and wide rows render model:thinking and plain model", () => {
   const main = renderMainRow({ ...MAIN, thinkingLevel: "high" }, 160);
   assert.ok(vis(main).includes("(claude-3-7-sonnet:high)"));
   assert.ok(
@@ -264,7 +282,32 @@ test("wide rows render model:thinking and plain model without a thinking level",
   );
 
   const standard = renderMainRow({ ...MAIN, thinkingLevel: "high" }, 100);
-  assert.ok(!vis(standard).includes("claude-3-7-sonnet"));
+  assert.ok(vis(standard).includes("(claude-3-7-sonnet:high)"));
+});
+
+test("the model segment is visible at 80/120/160 and hidden at 60", () => {
+  for (const cols of [80, 120, 160]) {
+    assert.ok(
+      vis(renderMainRow(MAIN, cols)).includes("(claude-3-7-sonnet)"),
+      `main model hidden at ${cols}`,
+    );
+    assert.ok(
+      vis(renderSubagentRow({ ...SCOUT }, false, cols)).includes(
+        "(claude-3-5-haiku)",
+      ),
+      `worker model hidden at ${cols}`,
+    );
+  }
+  assert.ok(
+    !vis(renderMainRow(MAIN, 60)).includes("claude-3-7-sonnet"),
+    "main model hidden at 60",
+  );
+  assert.ok(
+    !vis(renderSubagentRow({ ...SCOUT }, false, 60)).includes(
+      "claude-3-5-haiku",
+    ),
+    "worker model hidden at 60",
+  );
 });
 
 test("the model:thinking segment is wrapped in ANSI muted", () => {
@@ -278,6 +321,12 @@ test("the model:thinking segment is wrapped in ANSI muted", () => {
   assert.ok(
     plain.includes(`${ANSI_MUTED}(claude-3-7-sonnet)${ANSI_RESET}`),
     "a model without a thinking level is dimmed too",
+  );
+
+  const standard = renderMainRow(MAIN, 80);
+  assert.ok(
+    standard.includes(`${ANSI_MUTED}(claude-3-7-sonnet)${ANSI_RESET}`),
+    "the standard-width model segment is dimmed too",
   );
 
   const sub = renderSubagentRow({ ...SCOUT, thinkingLevel: "low" }, false, 160);
@@ -403,13 +452,13 @@ test("tool-phase main row renders the Main [tool: <name>] variant", () => {
 
 test("correlated subagent row uses the tree prefix and shows phase/tool, tokens, model", () => {
   const intermediate = renderSubagentRow({ ...SCOUT }, false, 160);
-  assert.ok(intermediate.startsWith("├─ ◇ explore auth"));
+  assert.ok(intermediate.startsWith("├─ ◇ scout"));
   assert.ok(vis(intermediate).includes("tool: read"));
   assert.ok(vis(intermediate).includes("· 1.4k tok"));
   assert.ok(vis(intermediate).includes("(claude-3-5-haiku)"));
 
   const terminal = renderSubagentRow({ ...SCOUT }, true, 160);
-  assert.ok(terminal.startsWith("└─ ◇ explore auth"));
+  assert.ok(terminal.startsWith("└─ ◇ scout"));
 });
 
 test("honest fallback yields subagent · <pid> and bare subagent", () => {
@@ -433,10 +482,10 @@ test("honest fallback yields subagent · <pid> and bare subagent", () => {
 // Documented field hiding per breakpoint
 // ---------------------------------------------------------------------------
 
-test("standard main row hides the model and keeps the session token total", () => {
+test("standard main row shows the model and keeps the session token total", () => {
   const line = renderMainRow({ ...MAIN, totalTokens: 12345 }, 100);
   assert.ok(vis(line).includes("· 12.3k tok"));
-  assert.ok(!vis(line).includes("claude-3-7-sonnet"));
+  assert.ok(vis(line).includes("(claude-3-7-sonnet)"));
 });
 
 test("narrow main row hides the model and tokens and uses an 8-cell gauge", () => {
@@ -446,10 +495,10 @@ test("narrow main row hides the model and tokens and uses an 8-cell gauge", () =
   assert.ok(line.includes(formatGauge(42.5, 8)));
 });
 
-test("standard subagent row hides the model and keeps tokens", () => {
+test("standard subagent row shows the model and keeps tokens", () => {
   const line = renderSubagentRow({ ...SCOUT }, false, 100);
   assert.ok(vis(line).includes("1.4k tok"));
-  assert.ok(!vis(line).includes("claude-3-5-haiku"));
+  assert.ok(vis(line).includes("(claude-3-5-haiku)"));
 });
 
 test("narrow subagent row hides tokens/model and keeps tool state", () => {
@@ -506,7 +555,7 @@ test("panel output is byte-identical across repeated renders at each breakpoint"
   }
 });
 
-test("maximally long sanitized labels still clamp within 60 columns", () => {
+test("maximally long sanitized identity still clamps within 60 columns", () => {
   const hostileBadge = renderSubagentRow(
     { badge: "x".repeat(100), tps: 5, phase: "streaming", tokens: 0 },
     false,
@@ -514,12 +563,12 @@ test("maximally long sanitized labels still clamp within 60 columns", () => {
   );
   assert.ok(stripAnsi(hostileBadge).length <= 60);
 
-  const hostileLabel = renderSubagentRow(
-    { label: "z".repeat(100), tps: 5, phase: "streaming", tokens: 0 },
+  const hostileLongerBadge = renderSubagentRow(
+    { badge: "z".repeat(100), tps: 5, phase: "streaming", tokens: 0 },
     false,
     60,
   );
-  assert.ok(stripAnsi(hostileLabel).length <= 60);
+  assert.ok(stripAnsi(hostileLongerBadge).length <= 60);
 
   const hostileTool = renderMainRow(
     { ...MAIN, phase: "tool", activeTool: "bash".repeat(40) },

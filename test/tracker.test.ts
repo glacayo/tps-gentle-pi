@@ -194,7 +194,7 @@ test("tool_execution_start/end toggle phase and clear the active tool", () => {
   assert.equal(s.phase, "waiting");
 });
 
-test("model_select refreshes the model label without waiting for a message", () => {
+test("model_select stores the qualified provider/id label", () => {
   const t = makeTracker();
 
   t.tracker.handle({
@@ -202,7 +202,36 @@ test("model_select refreshes the model label without waiting for a message", () 
     model: { provider: "anthropic", id: "claude-3-7-sonnet" },
   });
 
-  assert.equal(t.tracker.snapshot().model, "claude-3-7-sonnet");
+  assert.equal(t.tracker.snapshot().model, "anthropic/claude-3-7-sonnet");
+});
+
+test("model_select falls back to id-only/string/name labels and sanitizes hostile ids", () => {
+  const t = makeTracker();
+
+  // Missing provider: the compact id is kept as-is.
+  t.tracker.handle({ type: "model_select", model: { id: "claude-3-5-haiku" } });
+  assert.equal(t.tracker.snapshot().model, "claude-3-5-haiku");
+
+  // An empty provider is not a provider: still id-only.
+  t.tracker.handle({
+    type: "model_select",
+    model: { provider: "", id: "gpt-5" },
+  });
+  assert.equal(t.tracker.snapshot().model, "gpt-5");
+
+  // Plain string model and the modelName/modelId fallbacks are unchanged.
+  t.tracker.handle({ type: "model_select", model: "plain-model" });
+  assert.equal(t.tracker.snapshot().model, "plain-model");
+
+  t.tracker.handle({ type: "model_select", modelName: "named-model" });
+  assert.equal(t.tracker.snapshot().model, "named-model");
+
+  // Hostile provider/id text is sanitized before it reaches the snapshot.
+  t.tracker.handle({
+    type: "model_select",
+    model: { provider: "ac\u001b[31mme", id: "claude\n-3" },
+  });
+  assert.equal(t.tracker.snapshot().model, "acme/claude-3");
 });
 
 test("thinking_level_select refreshes the thinking level label", () => {

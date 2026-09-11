@@ -24,9 +24,7 @@ export const NARROW_MIN_COLS = 60;
 export const MAIN_GAUGE_CELLS = 16;
 /** Gauge columns used in the narrow (compact) layout. */
 export const COMPACT_GAUGE_CELLS = 8;
-/** Maximum visible length of the correlated task label used as a row name. */
-export const ROW_NAME_MAX = 24;
-/** Maximum visible length of the raw correlated agent badge. */
+/** Maximum visible length of the correlated agent badge used as the row name. */
 export const ROW_BADGE_MAX = 20;
 
 const SEP = "  ";
@@ -61,12 +59,13 @@ export interface PanelStats {
 
 /** One subagent worker row's metrics and (optionally) correlated identity. */
 export interface WorkerRow {
- /** Worker PID used for the honest fallback label when no label is correlated. */
+ /** Worker PID used for the honest fallback name when no badge is correlated. */
  pid?: number;
- /** Raw correlated agent name (e.g. `scout`); drawn as a separate dimmed badge. */
+ /**
+  * Correlated raw agent name (e.g. `scout`); sanitized and truncated to 20
+  * visible chars, it is the row's name. A task label is never rendered.
+  */
  badge?: string;
- /** Correlated task label; when present it is the row's name. */
- label?: string;
  tps: number;
  phase?: string;
  activeTool?: string;
@@ -164,27 +163,19 @@ export function phaseIcon(phase?: string): string {
 }
 
 /**
- * Row name: the correlated task label when present, otherwise the honest
- * `subagent · <pid>` / `subagent` fallback. The raw agent badge is never used
- * as a name.
+ * Row name: the correlated raw agent badge (sanitized, truncated to 20 visible
+ * chars) when present, otherwise the honest `subagent · <pid>` / `subagent`
+ * fallback. Task labels are never rendered.
  */
 function workerName(row: WorkerRow): string {
- if (row.label !== undefined) {
-  const label = truncateVisible(sanitizeText(row.label), ROW_NAME_MAX);
-  if (label !== "") return label;
+ if (row.badge !== undefined) {
+  const badge = truncateVisible(sanitizeText(row.badge), ROW_BADGE_MAX);
+  if (badge !== "") return badge;
  }
  if (Number.isInteger(row.pid) && (row.pid as number) > 0) {
   return `subagent · ${row.pid}`;
  }
  return "subagent";
-}
-
-/** Separate dimmed badge segment for the raw correlated agent name. */
-function badgeSegment(row: WorkerRow, theme?: PanelTheme): Segment | null {
- if (row.badge === undefined) return null;
- const badge = truncateVisible(sanitizeText(row.badge), ROW_BADGE_MAX);
- if (badge === "") return null;
- return segment(dim(badge, theme));
 }
 
 /** Dimmed `model` / `model:thinking` segment; absent when no model is known. */
@@ -300,10 +291,10 @@ export function renderHeader(
 }
 
 /**
- * Renders the main-agent meter row. Wide includes the model (and thinking level)
- * and the token total; standard keeps the token total; narrow shrinks the gauge
- * to 8 columns and hides both. The session aggregates (sparkline, μ, p95) live on
- * the header line, not here.
+ * Renders the main-agent meter row. Standard and wide include the model (and
+ * thinking level) and the token total; narrow shrinks the gauge to 8 columns and
+ * hides both. The session aggregates (sparkline, μ, p95) live on the header line,
+ * not here.
  *
  * `gaugeMax` defaults to the absolute scale; `renderPanel` passes the panel's
  * live maximum for a relative fill.
@@ -321,7 +312,7 @@ export function renderMainRow(
  const segments: Segment[] = [
   segment(`${phaseIcon(stats.phase)} ${mainLabel(stats)}`),
  ];
- if (bp === "wide") {
+ if (bp !== "narrow") {
   const model = modelSegment(stats.model, stats.thinkingLevel, theme);
   if (model !== null) segments.push(model);
  }
@@ -337,9 +328,10 @@ export function renderMainRow(
 }
 
 /**
- * Renders one subagent row. Wide includes the badge, tokens, and model (with
- * thinking level); standard includes the badge and tokens only; narrow keeps
- * identity + gauge + rate + state with an 8-cell gauge and no badge.
+ * Renders one subagent row. The row name is the correlated agent badge, or the
+ * honest `subagent` fallback. Standard and wide also include the model (with
+ * thinking level) and the token total; narrow keeps identity + gauge + rate +
+ * state with an 8-cell gauge and no model or tokens.
  */
 export function renderSubagentRow(
  row: WorkerRow,
@@ -356,10 +348,6 @@ export function renderSubagentRow(
   segment(`${isLast ? "└─" : "├─"} ${phaseIcon(row.phase)} ${workerName(row)}`),
  ];
  if (bp !== "narrow") {
-  const badge = badgeSegment(row, theme);
-  if (badge !== null) segments.push(badge);
- }
- if (bp === "wide") {
   const model = modelSegment(row.model, row.thinkingLevel, theme);
   if (model !== null) segments.push(model);
  }

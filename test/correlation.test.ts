@@ -204,7 +204,7 @@ test("subagent_cancel tool_result (cancelled status) evicts the task", () => {
   assert.equal(engine.tasks().length, 0);
 });
 
-test("Regime A: one worker + one active task shows the agent badge and label", () => {
+test("Regime A: the row carries the agent badge while the engine keeps the label", () => {
   const engine = new CorrelationEngine();
   engine.handleToolCall(
     runCall("c1", { agent: "scout", label: "explore auth" }),
@@ -217,8 +217,9 @@ test("Regime A: one worker + one active task shows the agent badge and label", (
   const rows = engine.correlate([worker]);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].badge, "scout");
-  assert.equal(rows[0].label, "explore auth");
+  assert.ok(!("label" in rows[0]), "the render row never carries task text");
   assert.equal(rows[0].taskId, "t1");
+  assert.equal(engine.tasks()[0].label, "explore auth");
 });
 
 test("Regime A row carries the worker's verified runtime facts", () => {
@@ -242,7 +243,7 @@ test("Regime A row carries the worker's verified runtime facts", () => {
   assert.equal(row.model, "claude-3-5-haiku");
 });
 
-test("Regime A row carries the label, the raw agent badge, and the thinking level", () => {
+test("Regime A row carries the raw agent badge and thinking level, never the label", () => {
   const engine = new CorrelationEngine();
   engine.handleToolCall(
     runCall("c1", { agent: "scout", label: "explore auth" }),
@@ -250,7 +251,7 @@ test("Regime A row carries the label, the raw agent badge, and the thinking leve
   engine.handleToolResult(runResult("c1", { taskId: "t1", status: "running" }));
 
   const [row] = engine.correlate([snapshot({ thinkingLevel: "high" })]);
-  assert.equal(row.label, "explore auth");
+  assert.ok(!("label" in row), "no label in the render row");
   assert.equal(row.badge, "scout");
   assert.equal(row.thinkingLevel, "high");
 });
@@ -271,7 +272,7 @@ test("Regime B keeps the thinking level but never invents a label or badge", () 
   assert.equal(rows[0].thinkingLevel, "low");
   assert.equal(rows[1].thinkingLevel, "medium");
   for (const row of rows) {
-    assert.equal(row.label, undefined);
+    assert.ok(!("label" in row), "no label in the render row");
     assert.equal(row.badge, undefined);
   }
 });
@@ -299,7 +300,7 @@ test("Regime B: two concurrent workers and tasks render metrics-only without gue
   assert.equal(rows.length, 2);
   for (const row of rows) {
     assert.equal(row.badge, undefined);
-    assert.equal(row.label, undefined);
+    assert.ok(!("label" in row), "no label in the render row");
     assert.ok(Number.isInteger(row.pid) && row.pid > 0);
   }
 });
@@ -362,7 +363,7 @@ test("two concurrent launches never guess identity by launch order or timestamp"
     assert.equal(rows.length, 2);
     for (const row of rows) {
       assert.equal(row.badge, undefined);
-      assert.equal(row.label, undefined);
+      assert.ok(!("label" in row), "no label in the render row");
       assert.equal(row.taskId, undefined);
     }
   }
@@ -379,7 +380,7 @@ test("single scout 1:1 match is deterministic across repeated correlates", () =>
   for (let i = 0; i < 3; i++) {
     const [row] = engine.correlate([worker]);
     assert.equal(row.badge, "scout");
-    assert.equal(row.label, "explore auth");
+    assert.ok(!("label" in row), "the render row never carries task text");
   }
 });
 
@@ -412,7 +413,7 @@ test("finished tasks cease to appear in the active set", () => {
   assert.equal(row.badge, undefined);
 });
 
-test("hostile agent and label names are sanitized in the correlated row", () => {
+test("hostile agent names are sanitized into the row and hostile labels stay engine-side", () => {
   const engine = new CorrelationEngine();
   engine.handleToolCall(
     runCall("c1", {
@@ -424,7 +425,8 @@ test("hostile agent and label names are sanitized in the correlated row", () => 
 
   const [row] = engine.correlate([snapshot()]);
   assert.equal(row.badge, "scout");
-  assert.equal(row.label, "exploreauthx");
+  assert.ok(!("label" in row), "hostile label never reaches the render row");
+  assert.equal(engine.tasks()[0].label, "exploreauthx");
 });
 
 test("unmatched worker metrics-only fallback preserves phase/tool/model", () => {

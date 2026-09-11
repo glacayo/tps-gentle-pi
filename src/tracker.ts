@@ -9,8 +9,10 @@
 // Provider usage is preferred when reported. When a provider defers usage during
 // streaming, a documented character-based estimate (`ceil(chars / 4)`) keeps the
 // meter moving; the estimate is replaced by authoritative usage at `message_end`.
-// Only Node builtins (via `./stats.ts` / `./types.ts`) are used.
+// Only Node builtins and the local `stats.ts` / `types.ts` / `format.ts` modules
+// are used.
 
+import { sanitizeText } from "./format.ts";
 import {
   computeTps,
   IncrementalMean,
@@ -119,13 +121,19 @@ function isAssistantTurn(event: UnknownRecord): boolean {
   return role === undefined || role === "assistant";
 }
 
-/** Reads the model label, preferring the compact model `id` (design §5 example). */
+/**
+ * Reads the model label. A model object carrying both a non-empty `provider` and
+ * `id` yields the qualified `provider/id`; otherwise the compact `id` (design §5
+ * example), a plain string model, or `modelName`/`modelId` is used.
+ */
 function readModelLabel(event: UnknownRecord): string | undefined {
   const model = event.model;
   if (typeof model === "string" && model.length > 0) return model;
   const modelRecord = asRecord(model);
   if (modelRecord !== null) {
+    const provider = readString(modelRecord.provider);
     const id = readString(modelRecord.id);
+    if (provider !== undefined && id !== undefined) return `${provider}/${id}`;
     if (id !== undefined) return id;
   }
   return readString(event.modelName) ?? readString(event.modelId);
@@ -365,7 +373,9 @@ export class EventTracker {
   }
 
   private onModelSelect(event: UnknownRecord): void {
-    this.model = clampLabel(readModelLabel(event));
+    const raw = readModelLabel(event);
+    // Untrusted event text is sanitized before the snapshot schema clamp.
+    this.model = raw === undefined ? undefined : clampLabel(sanitizeText(raw));
   }
 
   private onThinkingLevelSelect(event: UnknownRecord): void {
