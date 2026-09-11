@@ -92,6 +92,11 @@ export interface WireDeps {
   clearInterval?: (handle: TimerHandle | undefined) => void;
   tmpDir?: string;
   onProcessExit?: (handler: () => void) => void;
+  /**
+   * Injectable clock forwarded to every tracker the wiring constructs. When
+   * absent, each tracker keeps its own `Date.now` default (production behavior).
+   */
+  now?: () => number;
 }
 
 /**
@@ -174,7 +179,7 @@ function wireParent(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
     });
   const tmpDir = deps.tmpDir ?? os.tmpdir();
 
-  const tracker = new EventTracker();
+  const tracker = new EventTracker({ now: deps.now });
   const correlation = new CorrelationEngine();
   const sessionDir = createSessionDirectory({ tmpDir });
   if (sessionDir !== null) process.env.PI_TPS_DIR = sessionDir;
@@ -218,6 +223,7 @@ function wireWorker(pi: MeterApi, deps: WireDeps): void {
   const tracker = new EventTracker({
     pid: process.pid,
     workerId: `worker-${process.pid}`,
+    now: deps.now,
   });
   const publisher = new ThrottledPublisher(sessionDir, process.pid);
 

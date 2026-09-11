@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   breakpointFor,
   phaseIcon,
+  renderHeader,
   renderMainRow,
   renderPanel,
   renderSubagentRow,
@@ -49,6 +50,119 @@ test("breakpointFor classifies wide / standard / narrow at exact boundaries", ()
 
 test("breakpointFor clamps sub-minimum widths to the 60-column floor", () => {
   assert.equal(breakpointFor(40), "narrow");
+});
+
+// ---------------------------------------------------------------------------
+// Session header line
+// ---------------------------------------------------------------------------
+
+test("header renders identity, last, mean, p95, active, and the panel rate total", () => {
+  const line = vis(renderHeader(MAIN, [], 160));
+  assert.equal(
+    line,
+    `Throughput ${formatSparkline(MAIN.sparkline)}  12.0 tok/s  μ 38.2  p95 51.0  1 active  42.5 tok/s total`,
+  );
+});
+
+test("header drops every history-derived aggregate when the sparkline is empty", () => {
+  const line = vis(
+    renderHeader({ ...MAIN, sparkline: [], totalTokens: 500 }, [], 160),
+  );
+  assert.equal(line, "Throughput  1 active  42.5 tok/s total  500 tok");
+  assert.ok(!line.includes("μ"), "no mean without history");
+  assert.ok(!line.includes("p95"), "no p95 without history");
+  assert.ok(!line.includes("▁"), "no sparkline without history");
+});
+
+test("header counts active participants as the main agent plus every worker row", () => {
+  assert.ok(vis(renderHeader(MAIN, [], 160)).includes("1 active"));
+
+  const rows = [
+    { tps: 1, phase: "waiting", tokens: 0 },
+    { tps: 2, phase: "waiting", tokens: 0 },
+  ];
+  assert.ok(vis(renderHeader(MAIN, rows, 160)).includes("3 active"));
+});
+
+test("header shows streaming only when a participant is streaming", () => {
+  const idle = vis(renderHeader(MAIN, [], 160));
+  assert.ok(!idle.includes("streaming"), "idle panel has no streaming segment");
+
+  const mainOnly = vis(renderHeader({ ...MAIN, phase: "streaming" }, [], 160));
+  assert.ok(mainOnly.includes("1 streaming"), "main agent streams alone");
+
+  const rows = [
+    { tps: 1, phase: "streaming", tokens: 0 },
+    { tps: 2, phase: "waiting", tokens: 0 },
+  ];
+  const workersOnly = vis(renderHeader(MAIN, rows, 160));
+  assert.ok(workersOnly.includes("3 active"));
+  assert.ok(
+    workersOnly.includes("1 streaming"),
+    "only the streaming row counts",
+  );
+
+  const both = vis(renderHeader({ ...MAIN, phase: "streaming" }, rows, 160));
+  assert.ok(both.includes("2 streaming"), "main plus streaming rows");
+});
+
+test("header aggregates the panel-wide rate and token totals from stats and rows", () => {
+  const rows = [
+    { tps: 10.5, phase: "streaming", tokens: 400 },
+    { tps: 20, phase: "waiting", tokens: 600 },
+  ];
+  const line = vis(renderHeader({ ...MAIN, totalTokens: 1000 }, rows, 160));
+  assert.ok(line.includes("73.0 tok/s total"), "42.5 + 10.5 + 20");
+  assert.ok(line.includes("2.0k tok"), "1000 + 400 + 600");
+  assert.ok(!line.includes("tok tok"), "the tok unit is never duplicated");
+});
+
+test("header reports the token total only when something has been counted", () => {
+  const none = vis(
+    renderHeader(MAIN, [{ tps: 0, phase: "waiting", tokens: 0 }], 160),
+  );
+  assert.ok(!/ tok$/.test(none), `no token segment: ${none}`);
+  assert.ok(none.endsWith("42.5 tok/s total"), none);
+});
+
+test("header aggregates stay finite for non-finite inputs and fabricate nothing", () => {
+  const line = vis(
+    renderHeader(
+      { ...MAIN, tps: NaN, totalTokens: NaN },
+      [{ tps: Number.POSITIVE_INFINITY, phase: "streaming", tokens: NaN }],
+      160,
+    ),
+  );
+  assert.ok(line.includes("0.0 tok/s total"), line);
+  assert.ok(!/ tok$/.test(line), "no token total was fabricated");
+});
+
+test("header drops trailing segments instead of overflowing at each breakpoint", () => {
+  const spark = formatSparkline(MAIN.sparkline);
+
+  assert.equal(
+    vis(renderHeader(MAIN, [], 120)),
+    `Throughput ${spark}  12.0 tok/s  μ 38.2  p95 51.0  1 active  42.5 tok/s total`,
+  );
+  assert.equal(
+    vis(renderHeader(MAIN, [], 80)),
+    `Throughput ${spark}  12.0 tok/s  μ 38.2  p95 51.0  1 active`,
+  );
+  assert.equal(
+    vis(renderHeader(MAIN, [], 60)),
+    `Throughput ${spark}  12.0 tok/s  μ 38.2  p95 51.0`,
+  );
+
+  const rows = [
+    { label: "x".repeat(60), tps: 58, phase: "streaming", tokens: 3200 },
+  ];
+  for (const cols of [60, 80, 120, 160]) {
+    const header = renderHeader(MAIN, rows, cols);
+    assert.ok(
+      stripAnsi(header).length <= cols,
+      `header exceeds ${cols} cols: ${vis(header)}`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -153,6 +267,26 @@ test("wide rows render model:thinking and plain model without a thinking level",
   assert.ok(!vis(standard).includes("claude-3-7-sonnet"));
 });
 
+test("the model:thinking segment is wrapped in ANSI muted", () => {
+  const main = renderMainRow({ ...MAIN, thinkingLevel: "high" }, 160);
+  assert.ok(
+    main.includes(`${ANSI_MUTED}(claude-3-7-sonnet:high)${ANSI_RESET}`),
+    "main model:thinking is dimmed",
+  );
+
+  const plain = renderMainRow({ ...MAIN }, 160);
+  assert.ok(
+    plain.includes(`${ANSI_MUTED}(claude-3-7-sonnet)${ANSI_RESET}`),
+    "a model without a thinking level is dimmed too",
+  );
+
+  const sub = renderSubagentRow({ ...SCOUT, thinkingLevel: "low" }, false, 160);
+  assert.ok(
+    sub.includes(`${ANSI_MUTED}(claude-3-5-haiku:low)${ANSI_RESET}`),
+    "subagent model:thinking is dimmed",
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Per-row anatomy: token totals
 // ---------------------------------------------------------------------------
@@ -197,17 +331,18 @@ test("relative gauge scales every row against the panel's live maximum", () => {
   ];
   const lines = renderPanel(stats, rows, 160);
 
-  assert.ok(lines[0].includes("█".repeat(8) + TRACK.repeat(8)), "main 40/80");
-  assert.ok(lines[1].includes("█".repeat(16)), "worker 80/80 is full");
-  assert.ok(lines[2].includes("█".repeat(8) + TRACK.repeat(8)), "worker 40/80");
+  // lines[0] is the header; the gauges live on the main row and the worker rows.
+  assert.ok(lines[1].includes("█".repeat(8) + TRACK.repeat(8)), "main 40/80");
+  assert.ok(lines[2].includes("█".repeat(16)), "worker 80/80 is full");
+  assert.ok(lines[3].includes("█".repeat(8) + TRACK.repeat(8)), "worker 40/80");
 });
 
 test("an all-idle panel renders empty gauges instead of dividing by zero", () => {
   const stats = { ...MAIN, tps: 0, sparkline: [] };
   const rows = [{ tps: 0, phase: "waiting", tokens: 0 }];
   const lines = renderPanel(stats, rows, 160);
-  assert.ok(lines[0].includes(TRACK.repeat(16)));
   assert.ok(lines[1].includes(TRACK.repeat(16)));
+  assert.ok(lines[2].includes(TRACK.repeat(16)));
 });
 
 test("non-finite rates never produce a non-empty gauge", () => {
@@ -216,8 +351,8 @@ test("non-finite rates never produce a non-empty gauge", () => {
     [{ tps: Number.POSITIVE_INFINITY, phase: "streaming", tokens: 0 }],
     160,
   );
-  assert.ok(lines[0].includes(TRACK.repeat(16)));
   assert.ok(lines[1].includes(TRACK.repeat(16)));
+  assert.ok(lines[2].includes(TRACK.repeat(16)));
 });
 
 test("direct row renders keep the absolute gauge scale by default", () => {
@@ -232,15 +367,26 @@ test("direct row renders keep the absolute gauge scale by default", () => {
 // Main-agent row
 // ---------------------------------------------------------------------------
 
-test("wide main row renders gauge + rate + sparkline + μ + p95 + model", () => {
+test("wide main row renders identity + model + gauge + rate, without the header aggregates", () => {
   const line = renderMainRow(MAIN, 160);
   assert.ok(line.startsWith("· Main"), "idle main identity");
   assert.ok(line.includes(formatGauge(42.5, 16)), "16-cell gauge");
-  assert.ok(line.includes(formatSparkline(MAIN.sparkline)), "sparkline");
   assert.ok(vis(line).includes("42.5 tok/s"), "live rate");
-  assert.ok(vis(line).includes("μ 38.2"), "session mean");
-  assert.ok(vis(line).includes("p95 51.0"), "streaming p95");
   assert.ok(vis(line).includes("(claude-3-7-sonnet)"), "model label");
+});
+
+test("main row never carries the session aggregates, which live on the header", () => {
+  const spark = formatSparkline(MAIN.sparkline);
+  for (const cols of [60, 80, 120, 160]) {
+    const line = vis(renderMainRow({ ...MAIN, totalTokens: 12345 }, cols));
+    assert.ok(
+      !line.includes(spark),
+      `sparkline leaked into the row at ${cols}`,
+    );
+    assert.ok(!line.includes("▁"), `sparkline glyph leaked at ${cols}`);
+    assert.ok(!line.includes("μ"), `mean leaked into the row at ${cols}`);
+    assert.ok(!line.includes("p95"), `p95 leaked into the row at ${cols}`);
+  }
 });
 
 test("tool-phase main row renders the Main [tool: <name>] variant", () => {
@@ -287,18 +433,16 @@ test("honest fallback yields subagent · <pid> and bare subagent", () => {
 // Documented field hiding per breakpoint
 // ---------------------------------------------------------------------------
 
-test("standard main row hides the model and keeps mean + p95", () => {
-  const line = renderMainRow(MAIN, 100);
-  assert.ok(vis(line).includes("μ 38.2"));
-  assert.ok(vis(line).includes("p95 51.0"));
+test("standard main row hides the model and keeps the session token total", () => {
+  const line = renderMainRow({ ...MAIN, totalTokens: 12345 }, 100);
+  assert.ok(vis(line).includes("· 12.3k tok"));
   assert.ok(!vis(line).includes("claude-3-7-sonnet"));
 });
 
-test("narrow main row hides mean/p95/model and uses an 8-cell gauge", () => {
-  const line = renderMainRow(MAIN, 60);
-  assert.ok(!vis(line).includes("μ 38.2"));
-  assert.ok(!vis(line).includes("p95 51.0"));
+test("narrow main row hides the model and tokens and uses an 8-cell gauge", () => {
+  const line = renderMainRow({ ...MAIN, totalTokens: 12345 }, 60);
   assert.ok(!vis(line).includes("claude-3-7-sonnet"));
+  assert.ok(!vis(line).includes("12.3k tok"));
   assert.ok(line.includes(formatGauge(42.5, 8)));
 });
 
@@ -316,6 +460,19 @@ test("narrow subagent row hides tokens/model and keeps tool state", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Panel composition: header + main row + worker rows
+// ---------------------------------------------------------------------------
+
+test("panel lines are the header, the main row, then one row per worker", () => {
+  const rows = [{ tps: 10, phase: "streaming", tokens: 0 }];
+  const lines = renderPanel(MAIN, rows, 120);
+  assert.equal(lines.length, 3, "header + main row + one worker row");
+  assert.ok(vis(lines[0]).startsWith("Throughput"), vis(lines[0]));
+  assert.ok(vis(lines[1]).startsWith("· Main"), vis(lines[1]));
+  assert.ok(vis(lines[2]).startsWith("└─ ⠴ subagent"), vis(lines[2]));
+});
+
+// ---------------------------------------------------------------------------
 // Width safety: every emitted line fits the terminal
 // ---------------------------------------------------------------------------
 
@@ -326,7 +483,7 @@ test("every panel line satisfies stripAnsi(line).length <= cols at 60/80/120/160
   ];
   for (const cols of [60, 80, 120, 160]) {
     const lines = renderPanel(MAIN, rows, cols);
-    assert.equal(lines.length, 3, "one main row + two worker rows");
+    assert.equal(lines.length, 4, "header + main row + two worker rows");
     for (const line of lines) {
       assert.ok(
         stripAnsi(line).length <= cols,
@@ -384,10 +541,14 @@ test("maximally long sanitized labels still clamp within 60 columns", () => {
   assert.ok(stripAnsi(fallen).length <= 60);
 });
 
-test("zero-worker renders exactly one line; many-worker renders fit", () => {
+test("zero workers render exactly two lines; many workers add one line each", () => {
   const zero = renderPanel(MAIN, [], 80);
-  assert.equal(zero.length, 1);
-  assert.ok(stripAnsi(zero[0]).length <= 80);
+  assert.equal(zero.length, 2, "header + main row");
+  assert.ok(stripAnsi(zero[0]).startsWith("Throughput"), "header first");
+  assert.ok(stripAnsi(zero[1]).startsWith("· Main"), "main row second");
+  for (const line of zero) {
+    assert.ok(stripAnsi(line).length <= 80);
+  }
 
   const many = Array.from({ length: 12 }, (_, i) => ({
     tps: 20 + i,
@@ -395,7 +556,7 @@ test("zero-worker renders exactly one line; many-worker renders fit", () => {
     tokens: i * 100,
   }));
   const lines = renderPanel(MAIN, many, 80);
-  assert.equal(lines.length, 13);
+  assert.equal(lines.length, 14, "header + main row + 12 worker rows");
   for (const line of lines) {
     assert.ok(stripAnsi(line).length <= 80);
   }

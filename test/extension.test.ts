@@ -252,8 +252,12 @@ test("parent role creates the channel dir, exports PI_TPS_DIR and starts an unre
   const last = calls.setWidget[calls.setWidget.length - 1];
   assert.equal(last.id, WIDGET_ID);
   assert.ok(
-    Array.isArray(last.lines) && last.lines.length >= 1,
-    "panel lines rendered",
+    Array.isArray(last.lines) && last.lines.length === 2,
+    "header + main row rendered",
+  );
+  assert.ok(
+    stripAnsi((last.lines as string[])[0]).startsWith("Throughput"),
+    "the panel leads with the session header",
   );
   assert.deepEqual(last.options, { placement: "aboveEditor" });
 });
@@ -428,7 +432,7 @@ test("worker with a missing channel directory stays silent and creates no files"
   );
 });
 
-test("render tick composes exactly the WU-3 panel from tracker and correlation state", async (t) => {
+test("render tick composes exactly the panel (header + rows) from tracker and correlation state", async (t) => {
   setEnv(t, { GENTLE_PI_AGENTS_CHILD: undefined, PI_TPS_DIR: undefined });
   const tmpDir = mkTmp(t);
   const width = 160;
@@ -442,13 +446,20 @@ test("render tick composes exactly the WU-3 panel from tracker and correlation s
   const { ctx, calls } = makeCtx("tui", true);
   const timers = fakeTimers();
 
-  wireSession(pi, { ...timers, tmpDir });
+  // One shared, fully controlled clock, advanced only between events. The
+  // extension's internal tracker and the parallel expected-value tracker observe
+  // identical timestamps, so a completed turn can never straddle a millisecond
+  // boundary on one side only (the pre-existing flake this test pins).
+  let clockMs = 1_000;
+  const clock = (): number => clockMs;
+
+  wireSession(pi, { ...timers, tmpDir, now: clock });
   await triggerSessionStart(pi, ctx);
   const dir = process.env.PI_TPS_DIR;
   assert.ok(dir);
 
   // Replay the identical events into a parallel tracker to build the expected stats.
-  const parallel = new EventTracker();
+  const parallel = new EventTracker({ now: clock });
   const events = [
     { type: "message_start", message: { role: "assistant" } },
     {
@@ -463,6 +474,7 @@ test("render tick composes exactly the WU-3 panel from tracker and correlation s
     { type: "tool_execution_start", toolName: "read" },
   ];
   for (const event of events) {
+    clockMs += 10;
     await emit(pi, event.type, event, ctx);
     parallel.handle(event);
   }
@@ -510,8 +522,15 @@ test("render tick composes exactly the WU-3 panel from tracker and correlation s
   assert.deepEqual(last.lines, expected);
   assert.deepEqual(last.options, { placement: "aboveEditor" });
 
-  // The wired main row carries the new anatomy: phase icon plus session tokens.
-  const mainLine = stripAnsi((last.lines as string[])[0]);
+  // The panel leads with the session header, then the main row, then the workers.
+  const panel = last.lines as string[];
+  const headerLine = stripAnsi(panel[0]);
+  assert.ok(headerLine.startsWith("Throughput"), headerLine);
+  assert.ok(headerLine.includes("2 active"), "main agent + one worker");
+  assert.ok(headerLine.includes("1 streaming"), "the worker is streaming");
+
+  // The wired main row carries the WU-1 anatomy: phase icon plus session tokens.
+  const mainLine = stripAnsi(panel[1]);
   assert.ok(mainLine.startsWith("◇ Main [tool: read]"), mainLine);
   assert.ok(
     mainLine.includes(`· ${formatTokens(snap.totalTokens)}`),
@@ -519,7 +538,7 @@ test("render tick composes exactly the WU-3 panel from tracker and correlation s
   );
 
   // The uncorrelated worker row stays honest: fallback name, no badge, metrics kept.
-  const workerLine = stripAnsi((last.lines as string[])[1]);
+  const workerLine = stripAnsi(panel[2]);
   assert.ok(workerLine.startsWith("└─ ⠴ subagent · "), workerLine);
   assert.ok(workerLine.includes("(claude-3-5-haiku)"), "model still shown");
   assert.ok(

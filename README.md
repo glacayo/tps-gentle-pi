@@ -1,9 +1,10 @@
 # tps-gentle-pi
 
 A live tokens-per-second (TPS) meter for the [Pi coding agent](https://pi.dev). It
-shows the main agent's live rate, gauge, 12-turn sparkline, mean (`μ`), and P² p95
-in a compact panel above the editor, plus one honest row per active
-[gentle-pi](https://www.npmjs.com/package/gentle-pi) subagent when correlation
+draws a compact two-part panel above the editor: a **header line** with the turn
+sparkline, last rate, mean (`μ`), P² p95, participant counts, and panel-wide rate
+and token totals, plus one **row per participant** — the main agent and each
+[gentle-pi](https://www.npmjs.com/package/gentle-pi) subagent whose correlation
 evidence is deterministic. It is a zero-build TypeScript package: Node 24 executes
 the sources directly, and nothing is compiled.
 
@@ -20,12 +21,33 @@ the sources directly, and nothing is compiled.
    ```
 
 2. Start a TUI session and stream a response. The panel appears above the editor.
-3. Confirm the main gauge, `tok/s`, sparkline, `μ`, and `p95` update while output
-   streams.
+3. Confirm the header aggregates (sparkline, `μ`, `p95`, totals) and the main row
+   gauge and `tok/s` update while output streams.
 
 ## What it looks like
 
-The panel sits above the editor while a response streams:
+The panel sits above the editor while a response streams. It has two parts: a
+**header line** with the session-wide aggregates, then one **row per participant**
+(the main agent plus every live subagent).
+
+```text
+Throughput ▂▃▄▅▄▅▆▆▇▇██  58.0 tok/s  μ 38.2  p95 51.0  3 active  1 streaming  84.6 tok/s total  14.6k tok
+· Main  (claude-3-7-sonnet:high)  ████████████████  42.5 tok/s  · 12.3k tok
+├─ ◇ explore auth  scout  (claude-3-5-haiku)  █████████▏······  24.1 tok/s  tool: read  · 1.4k tok
+└─ ⠴ write tests  worker  (claude-3-5-haiku:low)  ██████▊·········  18.0 tok/s  streaming  · 820 tok
+```
+
+| Part | Fields, left to right. Trailing fields drop on narrow terminals. |
+| --- | --- |
+| Header | `Throughput` + 12-turn sparkline, last `tok/s`, `μ`, `p95`, `N active`, `N streaming`, panel `tok/s total`, total `tok` |
+| Main row | phase icon, `Main` (or `Main [tool: x]`), `model:thinking` on wide, relative gauge, `tok/s`, `· N tok` |
+| Subagent row | tree glyph + phase icon, correlated label or honest `subagent · <pid>`, dimmed badge, `model:thinking` on wide, relative gauge, `tok/s`, phase/tool state, `· N tok` |
+
+The gauge is **relative**: every row fills against the fastest live participant in
+the panel, so a quiet panel still shows its shape. The header aggregates derive
+only from the tracker and the live rows — nothing is fabricated.
+
+> Screenshots below are from the previous release and will be regenerated.
 
 ![Main agent TPS meter in the panel above the editor: gauge, live tok/s rate,
 12-turn sparkline, mean, and p95](docs/images/main-agent.png)

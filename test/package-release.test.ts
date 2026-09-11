@@ -35,7 +35,7 @@ const pkg = JSON.parse(read("package.json")) as Record<string, unknown>;
 
 test("package.json carries public release metadata for the glacayo repo", () => {
   assert.equal(pkg.name, "tps-gentle-pi");
-  assert.equal(pkg.version, "0.1.1");
+  assert.equal(pkg.version, "0.2.0");
   assert.equal(pkg.author, "glacayo");
   assert.equal(
     pkg.repository && (pkg.repository as { url?: string }).url,

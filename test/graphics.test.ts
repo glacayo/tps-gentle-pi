@@ -56,6 +56,15 @@ test("formatGauge renders a narrow 8-cell gauge", () => {
   assert.equal(formatGauge(0, 8), TRACK.repeat(8));
 });
 
+test("formatGauge fills an 8-cell narrow gauge relative to an explicit ceiling", () => {
+  assert.equal(formatGauge(80, 8, 80), "█".repeat(8), "the ceiling fills it");
+  assert.equal(formatGauge(40, 8, 80), "█".repeat(4) + TRACK.repeat(4));
+  assert.equal(formatGauge(10, 8, 80), "█" + TRACK.repeat(7));
+  assert.equal(formatGauge(0, 8, 80), TRACK.repeat(8));
+  assert.equal(formatGauge(120, 8, 80), "█".repeat(8), "above ceiling clamps");
+  assert.equal(formatGauge(40, 8, 0), TRACK.repeat(8), "no ceiling, no fill");
+});
+
 // ---------------------------------------------------------------------------
 // formatGauge relative fill (explicit ceiling)
 // ---------------------------------------------------------------------------

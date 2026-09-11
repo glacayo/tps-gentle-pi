@@ -227,21 +227,28 @@ test("vanilla Pi parent renders zero subagent rows while the main meter works", 
   const fixture = await startParent(t, tmpDir);
 
   const baseline = lastPanel(fixture);
-  assert.equal(baseline.length, 1, "main row only, no subagent rows");
+  assert.equal(baseline.length, 2, "header + main row, no subagent rows");
+  assert.ok(
+    stripAnsi(baseline[0]).startsWith("Throughput"),
+    "the session header is always present",
+  );
+  assert.ok(stripAnsi(baseline[1]).startsWith("· Main"), "main row present");
 
   await emitStreamingTurn(fixture.pi, fixture.ctx);
   fixture.timers.created[0].fn();
 
   const lines = lastPanel(fixture);
-  assert.equal(lines.length, 1, "still zero subagent rows after streaming");
-  const visible = stripAnsi(lines[0]);
-  assert.ok(visible.includes("Main"), "main-agent label present");
-  assert.ok(visible.includes("tok/s"), "live rate present");
-  assert.ok(visible.includes("μ"), "session mean present");
-  assert.ok(visible.includes("p95"), "p95 present");
+  assert.equal(lines.length, 2, "still zero subagent rows after streaming");
+  const header = stripAnsi(lines[0]);
+  const main = stripAnsi(lines[1]);
+  assert.ok(header.startsWith("Throughput"), "session header present");
+  assert.ok(header.includes("μ"), "session mean present");
+  assert.ok(header.includes("p95"), "p95 present");
+  assert.ok(main.startsWith("· Main"), "main-agent label present");
+  assert.ok(main.includes("tok/s"), "live rate present");
   assert.ok(
-    stripAnsi(baseline[0]) !== visible,
-    "panel content updates after streaming",
+    stripAnsi(baseline[1]) !== main,
+    "the main row updates after streaming",
   );
 });
 
@@ -265,8 +272,12 @@ test("one-off pi -e parent does not fabricate subagent rows", async (t) => {
   fixture.timers.created[0].fn();
 
   const lines = lastPanel(fixture);
-  assert.equal(lines.length, 1, "no subagent rows appear");
-  assert.ok(stripAnsi(lines[0]).includes("Main"), "main panel still works");
+  assert.equal(lines.length, 2, "header + main row; no subagent rows appear");
+  assert.ok(
+    stripAnsi(lines[0]).startsWith("Throughput"),
+    "the session header still renders",
+  );
+  assert.ok(stripAnsi(lines[1]).includes("Main"), "main panel still works");
 });
 
 test("failed channel directory creation still initializes the main widget", async (t) => {
@@ -291,8 +302,9 @@ test("failed channel directory creation still initializes the main widget", asyn
 
   fixture.timers.created[0].fn();
   const lines = lastPanel(fixture);
-  assert.equal(lines.length, 1, "main row present, subagent rows absent");
-  assert.ok(stripAnsi(lines[0]).includes("Main"), "main widget initialized");
+  assert.equal(lines.length, 2, "header + main row; subagent rows absent");
+  assert.ok(stripAnsi(lines[0]).includes("Throughput"), "header present");
+  assert.ok(stripAnsi(lines[1]).includes("Main"), "main widget initialized");
 });
 
 test("aggregation failure during a refresh keeps the main panel updating", async (t) => {
@@ -305,7 +317,7 @@ test("aggregation failure during a refresh keeps the main panel updating", async
 
   await emitStreamingTurn(fixture.pi, fixture.ctx);
   fixture.timers.created[0].fn();
-  const before = lastPanel(fixture)[0];
+  const before = lastPanel(fixture)[1];
 
   // Remove the channel directory so the next aggregation read fails (ENOENT).
   fs.rmSync(channelDir, { recursive: true, force: true });
@@ -314,10 +326,14 @@ test("aggregation failure during a refresh keeps the main panel updating", async
   fixture.timers.created[0].fn();
 
   const lines = lastPanel(fixture);
-  assert.equal(lines.length, 1, "subagent rows degrade to absent");
-  assert.ok(stripAnsi(lines[0]).includes("Main"), "main panel still renders");
+  assert.equal(lines.length, 2, "subagent rows degrade to absent");
   assert.ok(
-    stripAnsi(lines[0]) !== stripAnsi(before),
+    stripAnsi(lines[0]).startsWith("Throughput"),
+    "header still renders",
+  );
+  assert.ok(stripAnsi(lines[1]).includes("Main"), "main panel still renders");
+  assert.ok(
+    stripAnsi(lines[1]) !== stripAnsi(before),
     "main panel keeps updating despite the aggregation failure",
   );
 });
@@ -517,8 +533,16 @@ test("stale/dead worker snapshots evicted by the parent disappear from the panel
   fixture.timers.created[0].fn();
 
   const lines = lastPanel(fixture);
-  assert.equal(lines.length, 1, "no row remains for either evicted worker");
-  assert.ok(stripAnsi(lines[0]).includes("Main"), "main panel still renders");
+  assert.equal(
+    lines.length,
+    2,
+    "header + main; no row for either evicted worker",
+  );
+  assert.ok(stripAnsi(lines[1]).includes("Main"), "main panel still renders");
+  assert.ok(
+    !stripAnsi(lines[1]).includes("subagent"),
+    "no fabricated worker row",
+  );
   assert.ok(
     !fs.existsSync(path.join(channelDir, `worker-${process.pid}.json`)),
     "completed worker snapshot was removed",
@@ -543,9 +567,17 @@ test("repeated failed aggregation attempts across many ticks never degrade the m
     await emitStreamingTurn(fixture.pi, fixture.ctx);
     fixture.timers.created[0].fn();
     const lines = lastPanel(fixture);
-    assert.equal(lines.length, 1, `tick ${i}: subagent rows stay absent`);
+    assert.equal(
+      lines.length,
+      2,
+      `tick ${i}: header + main; subagent rows stay absent`,
+    );
     assert.ok(
-      stripAnsi(lines[0]).includes("Main"),
+      stripAnsi(lines[0]).startsWith("Throughput"),
+      `tick ${i}: header keeps rendering`,
+    );
+    assert.ok(
+      stripAnsi(lines[1]).includes("Main"),
       `tick ${i}: main panel keeps rendering`,
     );
   }
