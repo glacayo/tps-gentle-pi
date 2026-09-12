@@ -313,18 +313,30 @@ export function renderHeader(
   ),
  ];
  if (hasHistory) {
-  segments.push(segment(recolor(`${fmt1(history[history.length - 1])} tok/s`, theme?.foreground)));
+  segments.push(
+   segment(
+    recolor(`${fmt1(history[history.length - 1])} tok/s`, theme?.foreground),
+   ),
+  );
   segments.push(segment(recolor(`μ ${fmt1(stats.mean)}`, theme?.foreground)));
   segments.push(segment(recolor(`p95 ${fmt1(stats.p95)}`, theme?.foreground)));
  }
 
- segments.push(segment(recolor(`${1 + rows.length} active`, theme?.foreground)));
+ segments.push(
+  segment(recolor(`${1 + rows.length} active`, theme?.foreground)),
+ );
  const streaming = streamingCount(stats, rows);
- if (streaming > 0) segments.push(segment(recolor(`${streaming} streaming`, theme?.foreground)));
+ if (streaming > 0)
+  segments.push(segment(recolor(`${streaming} streaming`, theme?.foreground)));
 
  const liveTps = Number.isFinite(stats.tps) ? stats.tps : 0;
  segments.push(
-  segment(recolor(`${fmt1(liveTps + sumRows(rows, (row) => row.tps))} tok/s total`, theme?.foreground)),
+  segment(
+   recolor(
+    `${fmt1(liveTps + sumRows(rows, (row) => row.tps))} tok/s total`,
+    theme?.foreground,
+   ),
+  ),
  );
 
  const sessionTokens = Number.isFinite(stats.totalTokens)
