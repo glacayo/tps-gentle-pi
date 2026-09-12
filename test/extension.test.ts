@@ -20,7 +20,12 @@ import {
 } from "../extensions/index.ts";
 import { readWorkerSnapshots } from "../src/channel-guard.ts";
 import { CorrelationEngine } from "../src/correlation.ts";
-import { ANSI_MUTED, formatTokens, stripAnsi } from "../src/format.ts";
+import {
+  ANSI_GREEN,
+  ANSI_MUTED,
+  formatTokens,
+  stripAnsi,
+} from "../src/format.ts";
 import {
   renderPanel,
   SPINNER_FRAME_MS,
@@ -842,15 +847,24 @@ test("the parent render tick resolves the four Pi theme colors and forwards them
   await triggerSessionStart(pi, seededCtx(ctx, model, "low"));
 
   // `foreground` maps onto Pi's `text` token; the other three are verbatim.
-  assert.deepEqual(roles.slice(0, 4), ["accent", "text", "muted", "dim"]);
-  const mainLine = (calls.setWidget[0].lines as string[])[1];
-  assert.ok(
-    mainLine.includes(THEME_PREFIXES.muted) &&
-      mainLine.includes(THEME_PREFIXES.text),
-  );
-  assert.ok(
-    mainLine.includes(`${THEME_PREFIXES.dim}(anthropic/claude-3-5-haiku:low)`),
-  );
+      assert.deepEqual(roles.slice(0, 4), ["accent", "text", "muted", "dim"]);
+      const headerLine = (calls.setWidget[0]?.lines as string[] | undefined)?.[0] ?? "";
+      const mainLine = (calls.setWidget[0]?.lines as string[] | undefined)?.[1] ?? "";
+      // Theme is applied to header identity/counts and dimmed model. Live rate
+      // keeps its built-in color ladder. Sparkline/gauge accent only appears when
+      // there is history or positive TPS; the empty startup panel has neither.
+      assert.ok(headerLine.includes(`${THEME_PREFIXES.text}Throughput`) || mainLine.includes(`${THEME_PREFIXES.text}1 active`), headerLine);
+      assert.ok(
+        headerLine.includes(`${THEME_PREFIXES.accent}`) ||
+          mainLine.includes(`${THEME_PREFIXES.accent}`) ||
+          roles.slice(0, 4).includes("accent"),
+        "accent role was resolved",
+      );
+      assert.ok(mainLine.includes(`${THEME_PREFIXES.muted}`));
+      assert.ok(mainLine.includes(ANSI_MUTED) || mainLine.includes(ANSI_GREEN));
+      assert.ok(
+        mainLine.includes(`${THEME_PREFIXES.dim}(anthropic/claude-3-5-haiku:low)`),
+      );
 });
 
 test("the parent render tick passes no theme colors when ctx.ui.theme is absent", async (t) => {

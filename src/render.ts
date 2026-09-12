@@ -306,9 +306,6 @@ export function renderHeader(
  const cols = clampWidth(width);
  const history = stats.sparkline ?? [];
  const hasHistory = history.length > 0;
- const fg = (text: string): Segment =>
-  segment(recolor(text, theme?.foreground));
-
  const title = recolor("Throughput", theme?.foreground);
  const segments: Segment[] = [
   segment(
@@ -316,18 +313,18 @@ export function renderHeader(
   ),
  ];
  if (hasHistory) {
-  segments.push(fg(`${fmt1(history[history.length - 1])} tok/s`));
-  segments.push(fg(`μ ${fmt1(stats.mean)}`));
-  segments.push(fg(`p95 ${fmt1(stats.p95)}`));
+  segments.push(segment(recolor(`${fmt1(history[history.length - 1])} tok/s`, theme?.foreground)));
+  segments.push(segment(recolor(`μ ${fmt1(stats.mean)}`, theme?.foreground)));
+  segments.push(segment(recolor(`p95 ${fmt1(stats.p95)}`, theme?.foreground)));
  }
 
- segments.push(fg(`${1 + rows.length} active`));
+ segments.push(segment(recolor(`${1 + rows.length} active`, theme?.foreground)));
  const streaming = streamingCount(stats, rows);
- if (streaming > 0) segments.push(fg(`${streaming} streaming`));
+ if (streaming > 0) segments.push(segment(recolor(`${streaming} streaming`, theme?.foreground)));
 
  const liveTps = Number.isFinite(stats.tps) ? stats.tps : 0;
  segments.push(
-  fg(`${fmt1(liveTps + sumRows(rows, (row) => row.tps))} tok/s total`),
+  segment(recolor(`${fmt1(liveTps + sumRows(rows, (row) => row.tps))} tok/s total`, theme?.foreground)),
  );
 
  const sessionTokens = Number.isFinite(stats.totalTokens)
@@ -387,7 +384,7 @@ export function renderMainRow(
  segments.push(
   segment(formatGauge(stats.tps, cells, gaugeMax, theme?.accent, theme?.muted)),
  );
- segments.push(segment(recolor(formatRate(stats.tps), theme?.foreground)));
+ segments.push(segment(formatRate(stats.tps)));
  if (bp !== "narrow") {
   if (Number.isFinite(stats.totalTokens)) {
    segments.push(
@@ -443,7 +440,7 @@ export function renderSubagentRow(
  segments.push(
   segment(formatGauge(row.tps, cells, gaugeMax, theme?.accent, theme?.muted)),
  );
- segments.push(segment(recolor(formatRate(row.tps), theme?.foreground)));
+ segments.push(segment(formatRate(row.tps)));
  segments.push(segment(workerState(row)));
  if (bp !== "narrow") {
   segments.push(

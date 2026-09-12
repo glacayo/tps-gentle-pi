@@ -19,6 +19,7 @@ import {
 import {
   ANSI_MUTED,
   ANSI_RESET,
+  ANSI_YELLOW,
   formatRate,
   stripAnsi,
 } from "../src/format.ts";
@@ -743,7 +744,7 @@ test("a theme colors the gauge, sparkline, rates, counts, model, and tokens", ()
     `${FOREGROUND}1 active${ANSI_RESET}`,
     `${FOREGROUND}42.5 tok/s total${ANSI_RESET}`,
     formatGauge(MAIN.tps, 16, GAUGE_MAX_TPS, ACCENT, MUTED),
-    `${FOREGROUND}42.5 tok/s${ANSI_RESET}`,
+    `${ANSI_YELLOW}42.5 tok/s${ANSI_RESET}`,
     `${DIM}(claude-3-7-sonnet)${ANSI_RESET}`,
     `${MUTED}· 12.3k tok${ANSI_RESET}`,
     `${DIM}(claude-3-5-haiku)${ANSI_RESET}`,
