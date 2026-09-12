@@ -445,3 +445,123 @@ test("unmatched worker metrics-only fallback preserves phase/tool/model", () => 
   assert.equal(row.tokens, 90);
   assert.equal(row.model, "claude-3-5-haiku");
 });
+
+// ---------------------------------------------------------------------------
+// WU-5: anti-flicker stabilization and completed rows
+// ---------------------------------------------------------------------------
+
+/** Fixed epoch used as the mutable clock base for the stabilization window. */
+const T0 = 1_700_000_000_000;
+
+test("activeTool survives a 200 ms gap, holds at the boundary, then expires", () => {
+  let now = T0;
+  const engine = new CorrelationEngine({ now: () => now });
+  const base = snapshot({ phase: "tool", activeTool: "read", tps: 0 });
+  const noTool = () => [{ ...base, activeTool: undefined }];
+
+  const live = engine.correlate([base]);
+  assert.equal(live[0].activeTool, "read");
+  assert.equal(live[0].avgTps, undefined, "a live row carries no average");
+
+  now = T0 + 200;
+  assert.equal(engine.correlate(noTool())[0].activeTool, "read");
+  now = T0 + 400; // still inside the window, 200 ms after the last render tick
+  assert.equal(
+    engine.correlate(noTool())[0].activeTool,
+    "read",
+    "boundary holds",
+  );
+  now = T0 + 401;
+  assert.equal(
+    engine.correlate(noTool())[0].activeTool,
+    undefined,
+    "then expires",
+  );
+  now = T0 + 500;
+  assert.equal(
+    engine.correlate(noTool())[0].activeTool,
+    undefined,
+    "never resurrected",
+  );
+});
+
+test("tps survives a brief transition out of a live phase and then settles to zero", () => {
+  let now = T0;
+  const engine = new CorrelationEngine({ now: () => now });
+  const base = snapshot({
+    phase: "streaming",
+    tps: 42.5,
+    activeTool: undefined,
+  });
+  const idle = () => [{ ...base, phase: "waiting", tps: 0 }];
+
+  assert.equal(engine.correlate([base])[0].tps, 42.5);
+  now = T0 + 200;
+  assert.equal(
+    engine.correlate(idle())[0].tps,
+    42.5,
+    "the gauge does not blink",
+  );
+  now = T0 + 400;
+  assert.equal(engine.correlate(idle())[0].tps, 0, "no phantom rate when idle");
+});
+
+test("tokens never move backwards across ticks", () => {
+  let now = T0;
+  const engine = new CorrelationEngine({ now: () => now });
+  const base = snapshot({ totalTokens: 1400 });
+  assert.equal(engine.correlate([base])[0].tokens, 1400);
+
+  now = T0 + 200;
+  const lower = engine.correlate([{ ...base, totalTokens: 900 }]);
+  assert.equal(lower[0].tokens, 1400, "a smaller reading is never displayed");
+  now = T0 + 400;
+  const grown = engine.correlate([{ ...base, totalTokens: 2100 }]);
+  assert.equal(grown[0].tokens, 2100, "real growth still tracks the worker");
+});
+
+test("a completed snapshot carries completedAt and its lifetime average rate", () => {
+  const base = snapshot({
+    phase: "complete",
+    startTime: T0,
+    completedAt: T0 + 20_000,
+    tps: 0,
+    activeTool: undefined,
+    totalTokens: 1000,
+  });
+  const [row] = new CorrelationEngine().correlate([base]);
+
+  assert.equal(row.phase, "complete");
+  assert.equal(row.completedAt, T0 + 20_000);
+  assert.equal(row.avgTps, 50, "1000 tokens over 20 seconds");
+  assert.equal(row.tokens, 1000);
+});
+
+test("a completed row carries no tool or live rate forward from its prior snapshots", () => {
+  let now = T0;
+  const engine = new CorrelationEngine({ now: () => now });
+  const base = snapshot({
+    phase: "tool",
+    activeTool: "read",
+    tps: 42.5,
+    totalTokens: 400,
+  });
+  engine.correlate([base]);
+
+  now = T0 + 200;
+  const [row] = engine.correlate([
+    {
+      ...base,
+      phase: "complete",
+      startTime: now - 10_000,
+      completedAt: now,
+      tps: 0,
+      activeTool: undefined,
+      totalTokens: 500,
+    },
+  ]);
+
+  assert.equal(row.activeTool, undefined, "a finished worker shows no tool");
+  assert.equal(row.tps, 0, "a finished worker shows no live rate");
+  assert.equal(row.avgTps, 50, "500 tokens over 10 seconds");
+});

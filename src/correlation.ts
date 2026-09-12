@@ -35,6 +35,13 @@ export const SUBAGENT_RUN = "subagent_run";
 export const SUBAGENT_CONTINUE = "subagent_continue";
 export const SUBAGENT_CANCEL = "subagent_cancel";
 
+/**
+ * Anti-flicker window (milliseconds). A value that vanished from a worker snapshot
+ * during a brief phase transition is carried forward from the last observation for
+ * this long, so the panel does not blink between a tool and its follow-up phase.
+ */
+export const STABILIZE_MS = 400 as const;
+
 type ToolKind = "run" | "continue" | "cancel";
 type UnknownRecord = Record<string, unknown>;
 
@@ -42,6 +49,27 @@ type UnknownRecord = Record<string, unknown>;
 export interface CorrelatedWorker extends WorkerRow {
   /** Matched task id; only present under the deterministic Regime A join. */
   taskId?: string;
+}
+
+/**
+ * Last-known values observed for one worker PID, used to stabilize the panel across brief
+ * phase transitions. Each carried value owns its observation timestamp, so a value can only
+ * survive `STABILIZE_MS` after it was last *seen*: one that really disappeared expires
+ * even while the panel keeps ticking.
+ */
+interface SmoothedWorker {
+  /** Last tool name observed in a snapshot; absent when the worker published none. */
+  activeTool?: string;
+  /** Timestamp (ms) of the snapshot that carried `activeTool`; 0 when never seen. */
+  activeToolAt: number;
+  /** Phase of the last snapshot, used to detect a drop out of a live phase. */
+  phase?: string;
+  /** Last displayed rate; carried forward across a brief transition. */
+  tps: number;
+  /** Timestamp (ms) of the snapshot that carried a positive `tps`; 0 when never. */
+  tpsAt: number;
+  /** Highest cumulative token count observed so far. */
+  tokens: number;
 }
 
 /** Tracks the arguments of a `subagent_run` tool call until its result arrives. */
@@ -199,6 +227,7 @@ export class CorrelationEngine {
   private readonly registry = new Map<string, TrackedTask>();
   private readonly pending = new Map<string, PendingRun>();
   private readonly calls = new Map<string, CallEntry>();
+  private readonly smoothed = new Map<number, SmoothedWorker>();
 
   constructor(options: CorrelationOptions = {}) {
     this.now = options.now ?? defaultNow;
@@ -376,21 +405,74 @@ export class CorrelationEngine {
    * every other shape yields honest Regime B fallback rows with identity
    * omitted. The worker's own `thinkingLevel` is a verified runtime fact and is
    * carried in both regimes.
+   *
+   * Anti-flicker: a `activeTool` or `tps` that vanished during a phase transition
+   * within `STABILIZE_MS` is carried forward from the last observation of the same
+   * PID, token counts never move backwards, and a `complete` snapshot additionally
+   * carries `completedAt` plus the mean rate derived from its own timestamps.
    */
   correlate(workers: WorkerSnapshot[]): CorrelatedWorker[] {
     const active = this.activeTasks();
     const deterministic = workers.length === 1 && active.length === 1;
     const matched = deterministic ? active[0] : undefined;
+    const now = this.now();
 
-    return workers.map((snapshot) => {
+    const rows = workers.map((snapshot) => {
+      const previous = this.smoothed.get(snapshot.pid);
+      // A `complete` snapshot is authoritative: nothing about a live phase is carried.
+      const finished = snapshot.phase === "complete";
+      const inWindow = (at: number | undefined): boolean =>
+        !finished && at !== undefined && now - at <= STABILIZE_MS;
+
+      const observedTool = snapshot.activeTool;
+      const activeTool =
+        observedTool === undefined && inWindow(previous?.activeToolAt)
+          ? previous?.activeTool
+          : observedTool;
+
+      // A rate only carries when it just dropped to zero out of a live phase: a worker
+      // that was already idle must stay idle instead of resurrecting an old rate.
+      const livePhase =
+        previous?.phase === "streaming" || previous?.phase === "tool";
+      const observedTps = Number.isFinite(snapshot.tps) ? snapshot.tps : 0;
+      const lastTps = previous?.tps ?? 0;
+      const tps =
+        observedTps === 0 &&
+        livePhase &&
+        lastTps > 0 &&
+        inWindow(previous?.tpsAt)
+          ? lastTps
+          : observedTps;
+
+      // A worker's cumulative token count never decreases; a smaller reading is stale.
+      const tokens = Math.max(snapshot.totalTokens, previous?.tokens ?? 0);
+
+      this.smoothed.set(snapshot.pid, {
+        activeTool,
+        activeToolAt:
+          observedTool === undefined ? (previous?.activeToolAt ?? 0) : now,
+        phase: snapshot.phase,
+        tps,
+        tpsAt: observedTps > 0 ? now : (previous?.tpsAt ?? 0),
+        tokens,
+      });
+
       const row: CorrelatedWorker = {
         pid: snapshot.pid,
-        tps: snapshot.tps,
+        tps,
         phase: snapshot.phase,
-        activeTool: snapshot.activeTool,
-        tokens: snapshot.totalTokens,
+        activeTool,
+        tokens,
         model: snapshot.model,
       };
+
+      // Completed rows report what the worker achieved instead of a live rate.
+      if (finished && snapshot.completedAt !== undefined) {
+        row.completedAt = snapshot.completedAt;
+        const elapsedSeconds =
+          (snapshot.completedAt - snapshot.startTime) / 1000;
+        if (elapsedSeconds > 0) row.avgTps = tokens / elapsedSeconds;
+      }
 
       const thinking =
         snapshot.thinkingLevel === undefined
@@ -408,6 +490,16 @@ export class CorrelationEngine {
 
       return row;
     });
+
+    // Drop smoothing state for workers that left the panel, so a recycled PID can
+    // never inherit another worker's last-known tool, rate, or token count.
+    for (const pid of [...this.smoothed.keys()]) {
+      if (!workers.some((snapshot) => snapshot.pid === pid)) {
+        this.smoothed.delete(pid);
+      }
+    }
+
+    return rows;
   }
 
   private reactivate(taskId: string | undefined): void {

@@ -776,3 +776,89 @@ test("an absent or partial theme keeps the built-in colors and the plain layout"
     partial.includes(ANSI_MUTED) && partial.includes(formatRate(MAIN.tps)),
   );
 });
+
+// ---------------------------------------------------------------------------
+// WU-5: completed rows (✓ + average rate + tokens, no gauge)
+// ---------------------------------------------------------------------------
+
+/** A finished worker row: the shape `correlate` produces for `phase: "complete"`. */
+const DONE = {
+  badge: "scout",
+  tps: 0,
+  phase: "complete",
+  tokens: 4200,
+  avgTps: 52.5,
+  completedAt: 1_700_000_020_000,
+  model: "claude-3-5-haiku",
+};
+
+/** The 16-cell gauge track; a completed row must never draw it. */
+const TRACK_16 = TRACK.repeat(16);
+
+test("a completed worker row shows ✓, the average rate and tokens, and no gauge", () => {
+  const line = renderSubagentRow(DONE, true, 160);
+  const text = vis(line);
+  assert.ok(text.startsWith("└─ ✓ scout"), text);
+  assert.ok(text.includes("avg 52.5 tok/s"), text);
+  assert.ok(text.includes("· 4.2k tok"), text);
+  assert.ok(text.includes("(claude-3-5-haiku)"), "the model stays dimmed");
+  for (const absent of ["█", TRACK_16, "complete", "waiting", "tool:"]) {
+    assert.ok(!text.includes(absent), `completed row shows ${absent}`);
+  }
+});
+
+test("a completed worker row drops the gauge at every breakpoint and keeps avg + tokens", () => {
+  for (const cols of [60, 80, 120, 160]) {
+    const line = renderSubagentRow(DONE, false, cols);
+    const text = vis(line);
+    assert.ok(text.startsWith("├─ ✓ scout"), text);
+    assert.ok(text.includes("avg 52.5 tok/s"), `avg missing at ${cols}`);
+    assert.ok(text.includes("4.2k tok"), `tokens missing at ${cols}`);
+    assert.ok(
+      !line.includes("█") && !text.includes(TRACK_16),
+      `gauge at ${cols}`,
+    );
+    assert.ok(stripAnsi(line).length <= cols, `overflow at ${cols}: ${text}`);
+  }
+  assert.ok(
+    !vis(renderSubagentRow(DONE, false, 60)).includes("claude-3-5-haiku"),
+    "the model stays hidden at narrow",
+  );
+});
+
+test("a completed row without a correlated average falls back to the last live rate", () => {
+  const text = vis(
+    renderSubagentRow({ tps: 12.5, phase: "complete", tokens: 300 }, true, 160),
+  );
+  assert.ok(text.startsWith("└─ ✓ subagent"), text);
+  assert.ok(text.includes("avg 12.5 tok/s") && text.includes("300 tok"), text);
+});
+
+test("a completed main row hides the gauge and shows the average plus session tokens", () => {
+  const line = renderMainRow(
+    { ...MAIN, phase: "complete", avgTps: 51, totalTokens: 12345 },
+    160,
+  );
+  const text = vis(line);
+  assert.ok(text.startsWith("✓ Main"), text);
+  assert.ok(text.includes("avg 51.0 tok/s"), text);
+  assert.ok(text.includes("· 12.3k tok"), text);
+  assert.ok(text.includes("(claude-3-7-sonnet)"), "the model stays dimmed");
+  for (const absent of ["█", TRACK_16, "complete"]) {
+    assert.ok(!text.includes(absent), `completed main row shows ${absent}`);
+  }
+});
+
+test("active rows keep their gauge, rate and state now that completed rows exist", () => {
+  const worker = renderSubagentRow({ ...SCOUT }, false, 160);
+  assert.ok(
+    worker.includes(formatGauge(SCOUT.tps, 16, GAUGE_MAX_TPS)),
+    "worker gauge kept",
+  );
+  assert.ok(vis(worker).includes("tool: read"), "worker state kept");
+  assert.ok(!vis(worker).includes("avg "), "no average on a live row");
+
+  const main = renderMainRow(MAIN, 160);
+  assert.ok(main.includes(formatGauge(MAIN.tps, 16)), "main gauge kept");
+  assert.ok(!vis(main).includes("avg "), "no average on a live row");
+});

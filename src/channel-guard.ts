@@ -13,6 +13,7 @@ import { DIR_PREFIX, OWNER_FILENAME } from "./channel.ts";
 import type { OwnerMarker } from "./channel.ts";
 import { sanitizeText } from "./format.ts";
 import {
+  COMPLETED_PERSIST_MS,
   SNAPSHOT_STRING_MAX_LENGTH,
   SNAPSHOT_VERSION,
   STALENESS_MS,
@@ -160,12 +161,22 @@ export function isPidAlive(pid: number, options: GuardOptions = {}): boolean {
 
 type EvictionReason = "dead" | "stale" | "complete";
 
+/**
+ * Classifies why a snapshot no longer belongs in the panel. A completed worker is held
+ * visible for `COMPLETED_PERSIST_MS` after `completedAt`, then evicts as `complete`; a
+ * completed snapshot with no `completedAt` has no window and evicts immediately.
+ */
 function evictionReason(
   snapshot: WorkerSnapshot,
   options: GuardOptions,
 ): EvictionReason | null {
-  if (snapshot.phase === "complete") return "complete";
   const now = (options.now ?? defaultNow)();
+  if (snapshot.phase === "complete") {
+    if (snapshot.completedAt === undefined) return "complete";
+    return now - snapshot.completedAt < COMPLETED_PERSIST_MS
+      ? null
+      : "complete";
+  }
   if (now - snapshot.updatedAt > STALENESS_MS) return "stale";
   if (!isPidAlive(snapshot.pid, options)) return "dead";
   return null;

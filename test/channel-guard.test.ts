@@ -26,7 +26,7 @@ import {
   createSessionDirectory,
   writeSnapshotAtomic,
 } from "../src/channel.ts";
-import { STALENESS_MS } from "../src/types.ts";
+import { COMPLETED_PERSIST_MS, STALENESS_MS } from "../src/types.ts";
 import type { WorkerSnapshot } from "../src/types.ts";
 
 /** Fixed clock base so staleness/scavenge assertions never race the wall clock. */
@@ -332,29 +332,58 @@ test("readWorkerSnapshots evicts stale workers past the 5000 ms window", (t) => 
   );
 });
 
-test("readWorkerSnapshots evicts completed workers", (t) => {
+test("readWorkerSnapshots keeps a completed worker for the persistence window", (t: TestContext) => {
   const base = makeBase(t);
   const dir = path.join(base, "session");
   fs.mkdirSync(dir);
   const file = writeWorker(
     dir,
-    makeSnapshot({
-      pid: 9003,
-      phase: "complete",
-      completedAt: NOW,
-      updatedAt: NOW,
+    makeSnapshot({ pid: 9003, phase: "complete", completedAt: NOW, tps: 0 }),
+  );
+
+  const [kept] = readWorkerSnapshots(dir, {
+    now: () => NOW + COMPLETED_PERSIST_MS - 1,
+    kill: aliveKill(),
+  });
+  assert.equal(kept?.pid, 9003, "the completed row stays visible");
+  assert.equal(kept?.phase, "complete");
+  assert.equal(kept?.completedAt, NOW);
+  assert.ok(fs.existsSync(file), "snapshot is not unlinked inside the window");
+});
+
+test("readWorkerSnapshots evicts a completed worker after the persistence window", (t: TestContext) => {
+  const base = makeBase(t);
+  const dir = path.join(base, "session");
+  fs.mkdirSync(dir);
+  const file = writeWorker(
+    dir,
+    makeSnapshot({ pid: 9004, phase: "complete", completedAt: NOW, tps: 0 }),
+  );
+
+  assert.deepEqual(
+    readWorkerSnapshots(dir, {
+      now: () => NOW + COMPLETED_PERSIST_MS,
+      kill: aliveKill(),
     }),
+    [],
+  );
+  assert.strictEqual(fs.existsSync(file), false, "expired row unlinked");
+});
+
+test("readWorkerSnapshots evicts a completed snapshot with no completedAt", (t: TestContext) => {
+  const base = makeBase(t);
+  const dir = path.join(base, "session");
+  fs.mkdirSync(dir);
+  const file = writeWorker(
+    dir,
+    makeSnapshot({ pid: 9005, phase: "complete", tps: 0 }),
   );
 
   assert.deepEqual(
     readWorkerSnapshots(dir, { now: fixedNow, kill: aliveKill() }),
     [],
   );
-  assert.strictEqual(
-    fs.existsSync(file),
-    false,
-    "completed worker snapshot is unlinked",
-  );
+  assert.strictEqual(fs.existsSync(file), false, "no window without a stamp");
 });
 
 test("isPidAlive treats only ESRCH as death", () => {

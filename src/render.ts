@@ -66,6 +66,10 @@ export interface PanelStats {
  activeTool?: string;
  /** Session cumulative output tokens; drawn as `· N tok` on standard and wide. */
  totalTokens?: number;
+ /** Completion timestamp; present when the main agent reached `complete`. */
+ completedAt?: number;
+ /** Mean tokens/second over the session; drawn in place of the gauge when complete. */
+ avgTps?: number;
 }
 
 /** One subagent worker row's metrics and (optionally) correlated identity. */
@@ -84,6 +88,10 @@ export interface WorkerRow {
  model?: string;
  /** Reasoning effort drawn beside the model on wide layouts. */
  thinkingLevel?: string;
+ /** Completion timestamp of the worker; present when `phase` is `complete`. */
+ completedAt?: number;
+ /** Mean tokens/second over the worker's lifetime; drawn when `phase` is `complete`. */
+ avgTps?: number;
 }
 
 /** Optional ANSI prefixes from the active Pi theme: accent=gauge fill + sparkline,
@@ -228,6 +236,22 @@ function workerState(row: WorkerRow): string {
 }
 
 /**
+ * Completed-row metric segments shared by the main and worker rows: the average rate
+ * (`avg N tok/s`) followed by the token total, replacing the gauge and phase/tool state a
+ * live row shows. `rate` falls back to the last live rate when no average was correlated.
+ */
+function completedMetrics(
+ rate: number,
+ tokens: number,
+ theme?: PanelTheme,
+): Segment[] {
+ return [
+  segment(recolor(`avg ${formatRate(rate)}`, theme?.foreground)),
+  segment(recolor(`· ${formatTokens(tokens)}`, theme?.muted)),
+ ];
+}
+
+/**
  * Largest live TPS across the main row and every worker row. Non-finite and
  * negative rates are ignored, and an all-idle panel yields 0. `renderPanel`
  * raises this to at least `GAUGE_MAX_TPS` to form the hybrid gauge ceiling.
@@ -327,6 +351,9 @@ export function renderHeader(
  *
  * `gaugeMax` defaults to the absolute scale; `renderPanel` passes the hybrid
  * ceiling (the larger of the panel's live maximum and the absolute scale).
+ *
+ * A `complete` phase switches to the completed path above: identity and model are
+ * kept, the gauge and live rate are replaced by `avg N tok/s` and the token total.
  */
 export function renderMainRow(
  stats: PanelStats,
@@ -345,6 +372,17 @@ export function renderMainRow(
  if (bp !== "narrow") {
   const model = modelSegment(stats.model, stats.thinkingLevel, theme);
   if (model !== null) segments.push(model);
+ }
+ if (stats.phase === "complete") {
+  // Completed main row: average rate + session tokens, no gauge. The main agent does
+  // not complete in the current wiring, so this path only has to degrade gracefully.
+  const tokens = Number.isFinite(stats.totalTokens)
+   ? (stats.totalTokens as number)
+   : 0;
+  return compose(
+   [...segments, ...completedMetrics(stats.avgTps ?? stats.tps, tokens, theme)],
+   cols,
+  );
  }
  segments.push(
   segment(formatGauge(stats.tps, cells, gaugeMax, theme?.accent, theme?.muted)),
@@ -368,6 +406,10 @@ export function renderMainRow(
  * honest `subagent` fallback. Standard and wide also include the model (with
  * thinking level) and the token total; narrow keeps identity + gauge + rate +
  * state with an 8-cell gauge and no model or tokens. `frame` animates the icon.
+ *
+ * A `complete` phase switches to the completed path above: the icon is `✓`, the
+ * identity and dimmed model are kept, the gauge and phase/tool state are dropped,
+ * and the row closes with `avg N tok/s` plus the token total at every breakpoint.
  */
 export function renderSubagentRow(
  row: WorkerRow,
@@ -389,6 +431,14 @@ export function renderSubagentRow(
  if (bp !== "narrow") {
   const model = modelSegment(row.model, row.thinkingLevel, theme);
   if (model !== null) segments.push(model);
+ }
+ if (row.phase === "complete") {
+  // Completed worker row: identity, dimmed model, average rate, and the token total.
+  // No gauge and no phase/tool state text: a finished worker has no live reading.
+  return compose(
+   [...segments, ...completedMetrics(row.avgTps ?? row.tps, row.tokens, theme)],
+   cols,
+  );
  }
  segments.push(
   segment(formatGauge(row.tps, cells, gaugeMax, theme?.accent, theme?.muted)),

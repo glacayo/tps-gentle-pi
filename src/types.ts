@@ -10,6 +10,9 @@ export const THROTTLE_MS = 160 as const;
 /** Maximum time before a worker snapshot is considered stale (milliseconds). */
 export const STALENESS_MS = 5000 as const;
 
+/** How long a completed row stays visible after `completedAt` (milliseconds). */
+export const COMPLETED_PERSIST_MS = 10000 as const;
+
 /** Schema protocol version for worker snapshots. */
 export const SNAPSHOT_VERSION = 1 as const;
 
