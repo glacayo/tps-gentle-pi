@@ -29,14 +29,25 @@ export const ROW_BADGE_MAX = 20;
 
 const SEP = "  ";
 
-/** Phase glyphs rendered ahead of the row identity. */
-const PHASE_ICONS: Record<string, string> = {
- streaming: "⠴",
- tool: "◇",
- complete: "✓",
-};
+/** Braille frames cycled by the animated (`streaming`, `tool`) phases. */
+export const SPINNER_FRAMES = [
+ "⠋",
+ "⠙",
+ "⠹",
+ "⠸",
+ "⠼",
+ "⠴",
+ "⠦",
+ "⠧",
+ "⠇",
+ "⠏",
+];
+/** Wall-clock milliseconds each spinner frame stays on screen. */
+export const SPINNER_FRAME_MS = 80;
 /** Glyph for `waiting`, an unknown phase, or no phase at all. */
 const IDLE_ICON = "·";
+/** Glyph for a finished (`complete`) phase. */
+const COMPLETE_ICON = "✓";
 
 export type PanelBreakpoint = "wide" | "standard" | "narrow";
 
@@ -165,11 +176,14 @@ function mainLabel(stats: PanelStats): string {
 }
 
 /**
- * Phase glyph shown ahead of a row identity: `⠴` streaming, `◇` tool, `✓`
- * complete, and `·` for waiting, an unknown phase, or no phase at all.
+ * Phase glyph shown ahead of a row identity. `streaming` and `tool` cycle through
+ * `SPINNER_FRAMES` by `frame`; `complete` and every idle phase stay static.
  */
-export function phaseIcon(phase?: string): string {
- return PHASE_ICONS[phase ?? ""] ?? IDLE_ICON;
+export function phaseIcon(phase?: string, frame = 0): string {
+ if (phase === "streaming" || phase === "tool") {
+  return SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
+ }
+ return phase === "complete" ? COMPLETE_ICON : IDLE_ICON;
 }
 
 /**
@@ -319,13 +333,14 @@ export function renderMainRow(
  width: number,
  theme?: PanelTheme,
  gaugeMax = GAUGE_MAX_TPS,
+ frame = 0,
 ): string {
  const cols = clampWidth(width);
  const bp = breakpointFor(cols);
  const cells = bp === "narrow" ? COMPACT_GAUGE_CELLS : MAIN_GAUGE_CELLS;
 
  const segments: Segment[] = [
-  segment(`${phaseIcon(stats.phase)} ${mainLabel(stats)}`),
+  segment(`${phaseIcon(stats.phase, frame)} ${mainLabel(stats)}`),
  ];
  if (bp !== "narrow") {
   const model = modelSegment(stats.model, stats.thinkingLevel, theme);
@@ -352,7 +367,7 @@ export function renderMainRow(
  * Renders one subagent row. The row name is the correlated agent badge, or the
  * honest `subagent` fallback. Standard and wide also include the model (with
  * thinking level) and the token total; narrow keeps identity + gauge + rate +
- * state with an 8-cell gauge and no model or tokens.
+ * state with an 8-cell gauge and no model or tokens. `frame` animates the icon.
  */
 export function renderSubagentRow(
  row: WorkerRow,
@@ -360,13 +375,16 @@ export function renderSubagentRow(
  width: number,
  theme?: PanelTheme,
  gaugeMax = GAUGE_MAX_TPS,
+ frame = 0,
 ): string {
  const cols = clampWidth(width);
  const bp = breakpointFor(cols);
  const cells = bp === "narrow" ? COMPACT_GAUGE_CELLS : MAIN_GAUGE_CELLS;
 
  const segments: Segment[] = [
-  segment(`${isLast ? "└─" : "├─"} ${phaseIcon(row.phase)} ${workerName(row)}`),
+  segment(
+   `${isLast ? "└─" : "├─"} ${phaseIcon(row.phase, frame)} ${workerName(row)}`,
+  ),
  ];
  if (bp !== "narrow") {
   const model = modelSegment(row.model, row.thinkingLevel, theme);
@@ -399,15 +417,23 @@ export function renderPanel(
  rows: WorkerRow[],
  width: number,
  theme?: PanelTheme,
+ frame = 0,
 ): string[] {
  const gaugeMax = Math.max(maxLiveTps(stats, rows), GAUGE_MAX_TPS);
  const lines = [
   renderHeader(stats, rows, width, theme),
-  renderMainRow(stats, width, theme, gaugeMax),
+  renderMainRow(stats, width, theme, gaugeMax, frame),
  ];
  for (let i = 0; i < rows.length; i++) {
   lines.push(
-   renderSubagentRow(rows[i], i === rows.length - 1, width, theme, gaugeMax),
+   renderSubagentRow(
+    rows[i],
+    i === rows.length - 1,
+    width,
+    theme,
+    gaugeMax,
+    frame,
+   ),
   );
  }
  return lines;

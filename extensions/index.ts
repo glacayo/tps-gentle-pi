@@ -26,7 +26,11 @@ import {
   scavengeStaleDirectories,
 } from "../src/channel-guard.ts";
 import { CorrelationEngine } from "../src/correlation.ts";
-import { renderPanel } from "../src/render.ts";
+import {
+  renderPanel,
+  SPINNER_FRAME_MS,
+  SPINNER_FRAMES,
+} from "../src/render.ts";
 import type { PanelStats, PanelTheme } from "../src/render.ts";
 import { EventTracker } from "../src/tracker.ts";
 import type { ExtensionRole } from "../src/types.ts";
@@ -263,7 +267,11 @@ function wireParent(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
     const rows = correlation.correlate(snapshots);
     const width = process.stdout.columns || 80;
     const theme = panelTheme(ctx.ui);
-    ctx.ui.setWidget(WIDGET_ID, renderPanel(stats, rows, width, theme), {
+    // Wall-clock spinner phase, shared by every row in the tick.
+    const frame =
+      Math.floor((deps.now ? deps.now() : Date.now()) / SPINNER_FRAME_MS) %
+      SPINNER_FRAMES.length;
+    ctx.ui.setWidget(WIDGET_ID, renderPanel(stats, rows, width, theme, frame), {
       placement: WIDGET_PLACEMENT,
     });
   };

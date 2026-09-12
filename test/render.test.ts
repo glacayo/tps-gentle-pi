@@ -8,6 +8,8 @@ import {
   renderMainRow,
   renderPanel,
   renderSubagentRow,
+  SPINNER_FRAME_MS,
+  SPINNER_FRAMES,
 } from "../src/render.ts";
 import {
   formatGauge,
@@ -182,20 +184,34 @@ test("header drops trailing segments instead of overflowing at each breakpoint",
 // Per-row anatomy: phase icon, name, badge, model
 // ---------------------------------------------------------------------------
 
-test("phase icons mark streaming, tool, complete, and idle phases", () => {
-  assert.equal(phaseIcon("streaming"), "⠴");
-  assert.equal(phaseIcon("tool"), "◇");
+test("phase icons start the spinner and mark complete and idle statically", () => {
+  assert.equal(phaseIcon("streaming"), "⠋");
+  assert.equal(phaseIcon("tool"), "⠋");
   assert.equal(phaseIcon("complete"), "✓");
   assert.equal(phaseIcon("waiting"), "·");
   assert.equal(phaseIcon(undefined), "·");
   assert.equal(phaseIcon("bogus"), "·");
 });
 
+test("streaming and tool rotate through every braille frame, complete and idle do not", () => {
+  assert.equal(SPINNER_FRAMES.length, 10);
+  assert.equal(SPINNER_FRAME_MS, 80);
+  for (let frame = 0; frame < SPINNER_FRAMES.length * 2; frame++) {
+    const expected = SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
+    assert.equal(phaseIcon("streaming", frame), expected, `streaming ${frame}`);
+    assert.equal(phaseIcon("tool", frame), expected, `tool ${frame}`);
+    assert.equal(phaseIcon("complete", frame), "✓", `complete ${frame}`);
+    assert.equal(phaseIcon("waiting", frame), "·", `waiting ${frame}`);
+    assert.equal(phaseIcon("bogus", frame), "·", `bogus ${frame}`);
+    assert.equal(phaseIcon(undefined, frame), "·", `undefined ${frame}`);
+  }
+});
+
 test("each phase renders its icon ahead of the row identity", () => {
   const base = { tps: 5, tokens: 0 };
   assert.ok(
     renderSubagentRow({ ...base, phase: "streaming" }, true, 160).startsWith(
-      "└─ ⠴ subagent",
+      "└─ ⠋ subagent",
     ),
   );
   assert.ok(
@@ -213,7 +229,7 @@ test("each phase renders its icon ahead of the row identity", () => {
     "absent phase renders the idle icon",
   );
   assert.ok(
-    renderMainRow({ ...MAIN, phase: "streaming" }, 160).startsWith("⠴ Main"),
+    renderMainRow({ ...MAIN, phase: "streaming" }, 160).startsWith("⠋ Main"),
   );
 });
 
@@ -223,13 +239,13 @@ test("the correlated agent badge is the row name, truncated to 20 visible chars"
     false,
     200,
   );
-  assert.ok(vis(long).includes(`◇ ${"x".repeat(20)}`), "20-char name kept");
+  assert.ok(vis(long).includes(`⠋ ${"x".repeat(20)}`), "20-char name kept");
   assert.ok(!vis(long).includes("x".repeat(21)), "21st char truncated");
 });
 
 test("the agent badge is the row identity, never a separate segment", () => {
   const line = renderSubagentRow({ ...SCOUT }, false, 160);
-  assert.ok(vis(line).startsWith("├─ ◇ scout"), "badge is the name");
+  assert.ok(vis(line).startsWith("├─ ⠋ scout"), "badge is the name");
   assert.ok(
     !line.includes(`${ANSI_MUTED}scout${ANSI_RESET}`),
     "no separate dimmed badge segment",
@@ -253,13 +269,13 @@ test("a row without a correlated badge falls back to the honest name", () => {
     false,
     160,
   );
-  assert.ok(vis(line).startsWith("├─ ⠴ subagent"), "no fabricated identity");
+  assert.ok(vis(line).startsWith("├─ ⠋ subagent"), "no fabricated identity");
   assert.ok(!line.includes(ANSI_MUTED), "no dimmed identity segment");
 });
 
 test("the badge identity renders at every breakpoint and is absent without correlation", () => {
   assert.ok(
-    vis(renderSubagentRow({ ...SCOUT }, false, 60)).startsWith("├─ ◇ scout"),
+    vis(renderSubagentRow({ ...SCOUT }, false, 60)).startsWith("├─ ⠋ scout"),
     "badge identity survives the narrow layout",
   );
 
@@ -269,7 +285,7 @@ test("the badge identity renders at every breakpoint and is absent without corre
     160,
   );
   assert.ok(
-    vis(uncorrelated).startsWith("├─ ⠴ subagent · 4242"),
+    vis(uncorrelated).startsWith("├─ ⠋ subagent · 4242"),
     "honest fallback identity",
   );
   assert.ok(!vis(uncorrelated).includes("scout"), "no fabricated badge");
@@ -501,7 +517,7 @@ test("tool-phase main row renders the Main [tool: <name>] variant", () => {
     { ...MAIN, phase: "tool", activeTool: "bash" },
     160,
   );
-  assert.ok(line.startsWith("◇ Main [tool: bash]"));
+  assert.ok(line.startsWith("⠋ Main [tool: bash]"));
 });
 
 // ---------------------------------------------------------------------------
@@ -510,13 +526,13 @@ test("tool-phase main row renders the Main [tool: <name>] variant", () => {
 
 test("correlated subagent row uses the tree prefix and shows phase/tool, tokens, model", () => {
   const intermediate = renderSubagentRow({ ...SCOUT }, false, 160);
-  assert.ok(intermediate.startsWith("├─ ◇ scout"));
+  assert.ok(intermediate.startsWith("├─ ⠋ scout"));
   assert.ok(vis(intermediate).includes("tool: read"));
   assert.ok(vis(intermediate).includes("· 1.4k tok"));
   assert.ok(vis(intermediate).includes("(claude-3-5-haiku)"));
 
   const terminal = renderSubagentRow({ ...SCOUT }, true, 160);
-  assert.ok(terminal.startsWith("└─ ◇ scout"));
+  assert.ok(terminal.startsWith("└─ ⠋ scout"));
 });
 
 test("honest fallback yields subagent · <pid> and bare subagent", () => {
@@ -525,7 +541,7 @@ test("honest fallback yields subagent · <pid> and bare subagent", () => {
     false,
     160,
   );
-  assert.ok(withPid.startsWith("├─ ⠴ subagent · 4242"));
+  assert.ok(withPid.startsWith("├─ ⠋ subagent · 4242"));
   assert.ok(vis(withPid).includes("streaming"));
 
   const noPid = renderSubagentRow(
@@ -576,7 +592,32 @@ test("panel lines are the header, the main row, then one row per worker", () => 
   assert.equal(lines.length, 3, "header + main row + one worker row");
   assert.ok(vis(lines[0]).startsWith("Throughput"), vis(lines[0]));
   assert.ok(vis(lines[1]).startsWith("· Main"), vis(lines[1]));
-  assert.ok(vis(lines[2]).startsWith("└─ ⠴ subagent"), vis(lines[2]));
+  assert.ok(vis(lines[2]).startsWith("└─ ⠋ subagent"), vis(lines[2]));
+});
+
+test("renderPanel threads the frame into the main row and every worker row", () => {
+  const worker = { tps: 5, phase: "streaming", tokens: 0 };
+  for (const frame of [0, 3, 9, 10, 23]) {
+    const icon = SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
+    const lines = renderPanel(
+      { ...MAIN, phase: "tool", activeTool: "read" },
+      [worker],
+      160,
+      undefined,
+      frame,
+    ).map(vis);
+    assert.ok(lines[1].startsWith(`${icon} Main [tool: read]`), lines[1]);
+    assert.ok(lines[2].startsWith(`└─ ${icon} subagent`), lines[2]);
+  }
+  // Rows default to frame 0 and accept an explicit frame directly.
+  assert.ok(
+    vis(renderSubagentRow(worker, true, 160)).startsWith("└─ ⠋ subagent"),
+  );
+  assert.ok(
+    vis(
+      renderSubagentRow(worker, true, 160, undefined, undefined, 4),
+    ).startsWith(`└─ ${SPINNER_FRAMES[4]} subagent`),
+  );
 });
 
 // ---------------------------------------------------------------------------

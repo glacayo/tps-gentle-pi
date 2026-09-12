@@ -21,7 +21,11 @@ import {
 import { readWorkerSnapshots } from "../src/channel-guard.ts";
 import { CorrelationEngine } from "../src/correlation.ts";
 import { ANSI_MUTED, formatTokens, stripAnsi } from "../src/format.ts";
-import { renderPanel } from "../src/render.ts";
+import {
+  renderPanel,
+  SPINNER_FRAME_MS,
+  SPINNER_FRAMES,
+} from "../src/render.ts";
 import { EventTracker } from "../src/tracker.ts";
 
 // ---------------------------------------------------------------------------
@@ -521,7 +525,17 @@ test("render tick composes exactly the panel (header + rows) from tracker and co
   const expectedRows = new CorrelationEngine().correlate(
     readWorkerSnapshots(dir),
   );
-  const expected = renderPanel(expectedStats, expectedRows, width);
+  // The wired tick derives the spinner frame from the shared clock.
+  const frame = Math.floor(
+    (clockMs / SPINNER_FRAME_MS) % SPINNER_FRAMES.length,
+  );
+  const expected = renderPanel(
+    expectedStats,
+    expectedRows,
+    width,
+    undefined,
+    frame,
+  );
 
   const last = calls.setWidget[calls.setWidget.length - 1];
   assert.equal(last.id, WIDGET_ID);
@@ -537,7 +551,10 @@ test("render tick composes exactly the panel (header + rows) from tracker and co
 
   // The wired main row carries the WU-1 anatomy: phase icon plus session tokens.
   const mainLine = stripAnsi(panel[1]);
-  assert.ok(mainLine.startsWith("◇ Main [tool: read]"), mainLine);
+  assert.ok(
+    mainLine.startsWith(`${SPINNER_FRAMES[frame]} Main [tool: read]`),
+    mainLine,
+  );
   assert.ok(
     mainLine.includes(`· ${formatTokens(snap.totalTokens)}`),
     "main row shows the session token total",
@@ -545,12 +562,62 @@ test("render tick composes exactly the panel (header + rows) from tracker and co
 
   // The uncorrelated worker row stays honest: fallback name, no badge, metrics kept.
   const workerLine = stripAnsi(panel[2]);
-  assert.ok(workerLine.startsWith("└─ ⠴ subagent · "), workerLine);
+  assert.ok(
+    workerLine.startsWith(`└─ ${SPINNER_FRAMES[frame]} subagent · `),
+    workerLine,
+  );
   assert.ok(workerLine.includes("(claude-3-5-haiku)"), "model still shown");
   assert.ok(
     workerLine.includes("· 1.4k tok"),
     "worker token total still shown",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Spinner wiring: the frame is a pure function of `deps.now`.
+// ---------------------------------------------------------------------------
+
+test("renderTick passes the deps.now spinner frame to renderPanel", async (t) => {
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: undefined, PI_TPS_DIR: undefined });
+  const tmpDir = mkTmp(t);
+  const prevColumns = process.stdout.columns;
+  process.stdout.columns = 160;
+  t.after(() => {
+    process.stdout.columns = prevColumns;
+  });
+
+  const pi = makePi();
+  const { ctx, calls } = makeCtx("tui", true);
+  const timers = fakeTimers();
+  let clockMs = 0;
+  wireSession(pi, { ...timers, tmpDir, now: () => clockMs });
+  await triggerSessionStart(pi, ctx);
+  await emit(
+    pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "read" },
+    ctx,
+  );
+
+  // At 80 ms per frame: 0 and 79 are the first frame, 80 the second, 799 the
+  // last, and 800 wraps back to the first.
+  const cases: Array<[number, string]> = [
+    [0, SPINNER_FRAMES[0]],
+    [79, SPINNER_FRAMES[0]],
+    [80, SPINNER_FRAMES[1]],
+    [799, SPINNER_FRAMES[9]],
+    [800, SPINNER_FRAMES[0]],
+  ];
+  for (const [nowMs, icon] of cases) {
+    clockMs = nowMs;
+    timers.created[0].fn();
+    const lines = calls.setWidget[calls.setWidget.length - 1].lines as string[];
+    const mainLine = stripAnsi(lines[1]);
+    assert.ok(
+      mainLine.startsWith(`${icon} Main [tool: read]`),
+      `now=${nowMs}: ${mainLine}`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -33,8 +33,8 @@ The panel sits above the editor while a response streams. It has two parts: a
 ```text
 Throughput ▂▃▄▅▄▅▆▆▇▇██  58.0 tok/s  μ 38.2  p95 51.0  3 active  1 streaming  84.6 tok/s total  14.6k tok
 · Main  (anthropic/claude-3-7-sonnet:high)  ████▌···········  42.5 tok/s  · 12.3k tok
-├─ ◇ scout  (anthropic/claude-3-5-haiku)  ██▋·············  24.1 tok/s  tool: read  · 1.4k tok
-└─ ⠴ worker  (anthropic/claude-3-5-haiku:low)  █▉··············  18.0 tok/s  streaming  · 820 tok
+├─ ⠋ scout  (anthropic/claude-3-5-haiku)  ██▋·············  24.1 tok/s  tool: read  · 1.4k tok
+└─ ⠋ worker  (anthropic/claude-3-5-haiku:low)  █▉··············  18.0 tok/s  streaming  · 820 tok
 ```
 
 | Part | Fields, left to right. Trailing fields drop on narrow terminals. |
