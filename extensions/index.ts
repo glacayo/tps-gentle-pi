@@ -27,7 +27,7 @@ import {
 } from "../src/channel-guard.ts";
 import { CorrelationEngine } from "../src/correlation.ts";
 import { renderPanel } from "../src/render.ts";
-import type { PanelStats } from "../src/render.ts";
+import type { PanelStats, PanelTheme } from "../src/render.ts";
 import { EventTracker } from "../src/tracker.ts";
 import type { ExtensionRole } from "../src/types.ts";
 
@@ -58,9 +58,16 @@ const SIGNIFICANT_TRANSITIONS = new Set<string>([
   "message_end",
 ]);
 
+/** Minimal structural surface of the active Pi TUI theme. */
+interface MeterTheme {
+  fg(color: string, text: string): string;
+}
+
 /** Minimal structural surface of `ctx.ui` used for meter rendering. */
 interface MeterUi {
   setWidget(id: string, lines: string[] | undefined, options?: unknown): void;
+  /** Active Pi theme; absent in non-UI/headless contexts. */
+  theme?: MeterTheme;
 }
 
 /**
@@ -162,6 +169,37 @@ function wireTrackedEvents(pi: MeterApi, sink: (event: unknown) => void): void {
   }
 }
 
+const FG_PROBE = "\u0000";
+
+/** Resolves one theme color's ANSI prefix; unknown colors keep the built-in one. */
+function themePrefix(theme: MeterTheme, color: string): string | undefined {
+  try {
+    const wrapped = theme.fg(color, FG_PROBE);
+    const at = wrapped.indexOf(FG_PROBE);
+    return at > 0 ? wrapped.slice(0, at) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Builds the panel theme from the active Pi theme. `foreground` maps onto Pi's
+ * `text` token: Pi has no `foreground` color name. No theme, or no resolved
+ * role, yields `undefined` so the renderer keeps its built-in colors.
+ */
+function panelTheme(ui: MeterUi): PanelTheme | undefined {
+  const theme = ui.theme;
+  if (theme === undefined) return undefined;
+  const resolved: PanelTheme = {
+    accent: themePrefix(theme, "accent"),
+    foreground: themePrefix(theme, "text"),
+    muted: themePrefix(theme, "muted"),
+    dim: themePrefix(theme, "dim"),
+  };
+  const anyResolved = Object.values(resolved).some((v) => v !== undefined);
+  return anyResolved ? resolved : undefined;
+}
+
 function wireParentEvents(
   pi: MeterApi,
   tracker: EventTracker,
@@ -224,7 +262,8 @@ function wireParent(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
       sessionDir === null ? [] : readWorkerSnapshots(sessionDir);
     const rows = correlation.correlate(snapshots);
     const width = process.stdout.columns || 80;
-    ctx.ui.setWidget(WIDGET_ID, renderPanel(stats, rows, width), {
+    const theme = panelTheme(ctx.ui);
+    ctx.ui.setWidget(WIDGET_ID, renderPanel(stats, rows, width, theme), {
       placement: WIDGET_PLACEMENT,
     });
   };

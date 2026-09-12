@@ -8,8 +8,13 @@ import {
   formatGauge,
   formatSparkline,
 } from "../src/graphics.ts";
+import { ANSI_RESET } from "../src/format.ts";
 
 const TRACK = "·";
+
+/** Stand-in theme prefixes: only the byte layout matters to these renderers. */
+const ACCENT = "\u001b[38;5;99m";
+const TRACK_COLOR = "\u001b[38;5;240m";
 
 // ---------------------------------------------------------------------------
 // Mandated block alphabet
@@ -141,4 +146,37 @@ test("formatGauge boundaries are exact at empty and full", () => {
 test("formatSparkline normalizes the history maximum to the top block", () => {
   // max = 9 → █; 6 → ▆; 3 → ▃; 0 → ▁.
   assert.equal(formatSparkline([0, 3, 6, 9]), "▁▃▆█");
+});
+
+test("formatGauge wraps the filled cells and the track separately when colored", () => {
+  const cases: Array<[number, string]> = [
+    [
+      75,
+      `${ACCENT}${"█".repeat(8)}${ANSI_RESET}${TRACK_COLOR}${TRACK.repeat(8)}${ANSI_RESET}`,
+    ],
+    [
+      20,
+      `${ACCENT}██▏${ANSI_RESET}${TRACK_COLOR}${TRACK.repeat(13)}${ANSI_RESET}`,
+    ],
+    [0, `${TRACK_COLOR}${TRACK.repeat(16)}${ANSI_RESET}`],
+    [150, `${ACCENT}${"█".repeat(16)}${ANSI_RESET}`],
+  ];
+  for (const [tps, want] of cases) {
+    assert.equal(formatGauge(tps, 16, 150, ACCENT, TRACK_COLOR), want);
+  }
+});
+
+test("formatSparkline wraps its blocks in one colored run", () => {
+  assert.equal(formatSparkline([7, 1, 4], ACCENT), `${ACCENT}█▂▅${ANSI_RESET}`);
+  assert.equal(formatSparkline([0, 0], ACCENT), `${ACCENT}▁▁${ANSI_RESET}`);
+  assert.equal(formatSparkline([], ACCENT), "");
+});
+
+test("omitted colors leave the gauge and sparkline byte-identical to plain output", () => {
+  assert.equal(
+    formatGauge(75, 16, 150, undefined, undefined),
+    formatGauge(75, 16, 150),
+  );
+  assert.equal(formatGauge(75, 16, 150), "█".repeat(8) + TRACK.repeat(8));
+  assert.equal(formatSparkline([7, 1, 4], undefined), "█▂▅");
 });

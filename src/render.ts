@@ -75,8 +75,12 @@ export interface WorkerRow {
  thinkingLevel?: string;
 }
 
-/** Minimal theme: color used to dim model labels. */
+/** Optional ANSI prefixes from the active Pi theme: accent=gauge fill + sparkline,
+ * foreground=text/rates/counts, muted=gauge track + tokens, dim=model. */
 export interface PanelTheme {
+ accent?: string;
+ foreground?: string;
+ muted?: string;
  dim?: string;
 }
 
@@ -101,6 +105,12 @@ export function breakpointFor(width: number): PanelBreakpoint {
 
 function dim(text: string, theme?: PanelTheme): string {
  return `${theme?.dim ?? ANSI_MUTED}${text}${ANSI_RESET}`;
+}
+
+/** Applies a theme prefix to `text`, dropping any color it already carries. */
+function recolor(text: string, prefix?: string): string {
+ if (prefix === undefined || prefix === "") return text;
+ return `${prefix}${stripAnsi(text)}${ANSI_RESET}`;
 }
 
 /** Formats a number to one decimal place (non-finite → 0.0). */
@@ -246,35 +256,40 @@ function streamingCount(stats: PanelStats, rows: WorkerRow[]): number {
  * when something has been counted. Every aggregate derives only from `stats` and
  * `rows`; a narrow terminal drops trailing segments instead of overflowing.
  *
- * `_theme` is accepted for signature parity with the row renderers. The header
- * carries no dimmed chrome today, so it is intentionally unused.
+ * `theme` colors the header text, rates, and counts (foreground), the sparkline
+ * (accent), and the token total (muted).
  */
 export function renderHeader(
  stats: PanelStats,
  rows: WorkerRow[],
  width: number,
- _theme?: PanelTheme,
+ theme?: PanelTheme,
 ): string {
  const cols = clampWidth(width);
  const history = stats.sparkline ?? [];
  const hasHistory = history.length > 0;
+ const fg = (text: string): Segment =>
+  segment(recolor(text, theme?.foreground));
 
+ const title = recolor("Throughput", theme?.foreground);
  const segments: Segment[] = [
-  segment(hasHistory ? `Throughput ${formatSparkline(history)}` : "Throughput"),
+  segment(
+   hasHistory ? `${title} ${formatSparkline(history, theme?.accent)}` : title,
+  ),
  ];
  if (hasHistory) {
-  segments.push(segment(`${fmt1(history[history.length - 1])} tok/s`));
-  segments.push(segment(`μ ${fmt1(stats.mean)}`));
-  segments.push(segment(`p95 ${fmt1(stats.p95)}`));
+  segments.push(fg(`${fmt1(history[history.length - 1])} tok/s`));
+  segments.push(fg(`μ ${fmt1(stats.mean)}`));
+  segments.push(fg(`p95 ${fmt1(stats.p95)}`));
  }
 
- segments.push(segment(`${1 + rows.length} active`));
+ segments.push(fg(`${1 + rows.length} active`));
  const streaming = streamingCount(stats, rows);
- if (streaming > 0) segments.push(segment(`${streaming} streaming`));
+ if (streaming > 0) segments.push(fg(`${streaming} streaming`));
 
  const liveTps = Number.isFinite(stats.tps) ? stats.tps : 0;
  segments.push(
-  segment(`${fmt1(liveTps + sumRows(rows, (row) => row.tps))} tok/s total`),
+  fg(`${fmt1(liveTps + sumRows(rows, (row) => row.tps))} tok/s total`),
  );
 
  const sessionTokens = Number.isFinite(stats.totalTokens)
@@ -284,7 +299,7 @@ export function renderHeader(
  if (totalTokens > 0) {
   // `formatTokens` already carries the `tok` unit, so the segment is its output
   // verbatim: the header reads `2.0k tok`, never `2.0k tok tok`.
-  segments.push(segment(formatTokens(totalTokens)));
+  segments.push(segment(recolor(formatTokens(totalTokens), theme?.muted)));
  }
 
  return compose(segments, cols);
@@ -316,11 +331,17 @@ export function renderMainRow(
   const model = modelSegment(stats.model, stats.thinkingLevel, theme);
   if (model !== null) segments.push(model);
  }
- segments.push(segment(formatGauge(stats.tps, cells, gaugeMax)));
- segments.push(segment(formatRate(stats.tps)));
+ segments.push(
+  segment(formatGauge(stats.tps, cells, gaugeMax, theme?.accent, theme?.muted)),
+ );
+ segments.push(segment(recolor(formatRate(stats.tps), theme?.foreground)));
  if (bp !== "narrow") {
   if (Number.isFinite(stats.totalTokens)) {
-   segments.push(segment(`· ${formatTokens(stats.totalTokens as number)}`));
+   segments.push(
+    segment(
+     recolor(`· ${formatTokens(stats.totalTokens as number)}`, theme?.muted),
+    ),
+   );
   }
  }
 
@@ -351,11 +372,15 @@ export function renderSubagentRow(
   const model = modelSegment(row.model, row.thinkingLevel, theme);
   if (model !== null) segments.push(model);
  }
- segments.push(segment(formatGauge(row.tps, cells, gaugeMax)));
- segments.push(segment(formatRate(row.tps)));
+ segments.push(
+  segment(formatGauge(row.tps, cells, gaugeMax, theme?.accent, theme?.muted)),
+ );
+ segments.push(segment(recolor(formatRate(row.tps), theme?.foreground)));
  segments.push(segment(workerState(row)));
  if (bp !== "narrow") {
-  segments.push(segment(`· ${formatTokens(row.tokens)}`));
+  segments.push(
+   segment(recolor(`· ${formatTokens(row.tokens)}`, theme?.muted)),
+  );
  }
 
  return compose(segments, cols);

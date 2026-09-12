@@ -14,7 +14,12 @@ import {
   formatSparkline,
   GAUGE_MAX_TPS,
 } from "../src/graphics.ts";
-import { ANSI_MUTED, ANSI_RESET, stripAnsi } from "../src/format.ts";
+import {
+  ANSI_MUTED,
+  ANSI_RESET,
+  formatRate,
+  stripAnsi,
+} from "../src/format.ts";
 
 /** Visible (ANSI-stripped) text for presence/absence assertions. */
 const vis = (line: string): string => stripAnsi(line);
@@ -673,5 +678,60 @@ test("layout decisions stay stable across repeats of the same inputs", () => {
   assert.equal(
     renderSubagentRow(row, true, 160),
     renderSubagentRow(row, true, 160),
+  );
+});
+
+/** Stand-in theme: the four semantic roles resolved from the active Pi theme. */
+const ACCENT = "\u001b[38;5;99m";
+const FOREGROUND = "\u001b[39m";
+const MUTED = "\u001b[38;5;240m";
+const DIM = "\u001b[38;5;245m";
+const THEME = {
+  accent: ACCENT,
+  foreground: FOREGROUND,
+  muted: MUTED,
+  dim: DIM,
+};
+const THEMED = { ...MAIN, totalTokens: 12345 };
+
+test("a theme colors the gauge, sparkline, rates, counts, model, and tokens", () => {
+  const header = renderHeader(THEMED, [], 160, THEME);
+  const panel = renderPanel(THEMED, [{ ...SCOUT }], 160, THEME).join("\n");
+  const wanted = [
+    `${ACCENT}${formatSparkline(MAIN.sparkline)}${ANSI_RESET}`,
+    `${FOREGROUND}1 active${ANSI_RESET}`,
+    `${FOREGROUND}42.5 tok/s total${ANSI_RESET}`,
+    formatGauge(MAIN.tps, 16, GAUGE_MAX_TPS, ACCENT, MUTED),
+    `${FOREGROUND}42.5 tok/s${ANSI_RESET}`,
+    `${DIM}(claude-3-7-sonnet)${ANSI_RESET}`,
+    `${MUTED}· 12.3k tok${ANSI_RESET}`,
+    `${DIM}(claude-3-5-haiku)${ANSI_RESET}`,
+    `${MUTED}· 1.4k tok${ANSI_RESET}`,
+  ];
+  for (const want of wanted) {
+    assert.ok(header.includes(want) || panel.includes(want), want);
+  }
+});
+
+test("an absent or partial theme keeps the built-in colors and the plain layout", () => {
+  const rows = [{ ...SCOUT }];
+  const plain = renderPanel(THEMED, rows, 160);
+  for (const prefix of [ACCENT, FOREGROUND, MUTED, DIM]) {
+    assert.equal(plain.join("\n").includes(prefix), false, prefix);
+  }
+  assert.deepEqual(renderPanel(THEMED, rows, 160, undefined), plain);
+  assert.deepEqual(renderPanel(THEMED, rows, 160, {}), plain);
+  assert.deepEqual(
+    renderPanel(THEMED, rows, 160, THEME).map(vis),
+    plain.map(vis),
+  );
+  const partial = renderMainRow(THEMED, 160, { accent: ACCENT });
+  assert.ok(
+    partial.includes(
+      formatGauge(MAIN.tps, 16, GAUGE_MAX_TPS, ACCENT, undefined),
+    ),
+  );
+  assert.ok(
+    partial.includes(ANSI_MUTED) && partial.includes(formatRate(MAIN.tps)),
   );
 });

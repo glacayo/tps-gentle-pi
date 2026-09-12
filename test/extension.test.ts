@@ -20,7 +20,7 @@ import {
 } from "../extensions/index.ts";
 import { readWorkerSnapshots } from "../src/channel-guard.ts";
 import { CorrelationEngine } from "../src/correlation.ts";
-import { formatTokens, stripAnsi } from "../src/format.ts";
+import { ANSI_MUTED, formatTokens, stripAnsi } from "../src/format.ts";
 import { renderPanel } from "../src/render.ts";
 import { EventTracker } from "../src/tracker.ts";
 
@@ -53,7 +53,12 @@ interface WidgetCall {
   options: unknown;
 }
 
-function makeCtx(mode: string, hasUI = true) {
+/** Minimal Pi theme surface forwarded into the panel (WU4a). */
+interface PiTheme {
+  fg(color: string, text: string): string;
+}
+
+function makeCtx(mode: string, hasUI = true, theme?: PiTheme) {
   const calls = {
     setWidget: [] as WidgetCall[],
     notify: [] as unknown[][],
@@ -77,6 +82,7 @@ function makeCtx(mode: string, hasUI = true) {
       setStatus(...args: unknown[]) {
         calls.setStatus.push(args);
       },
+      theme,
     },
   };
   return { ctx, calls };
@@ -735,4 +741,59 @@ test("worker session without ctx model or thinking publishes no model keys", asy
   assert.equal("thinkingLevel" in parsed, false);
 
   await emit(pi, "agent_end", { type: "agent_end" }, ctx);
+});
+
+/** Stand-in ANSI prefixes keyed by Pi theme color name. */
+const THEME_PREFIXES: Record<string, string> = {
+  accent: "\u001b[38;5;99m",
+  text: "\u001b[39m",
+  muted: "\u001b[38;5;240m",
+  dim: "\u001b[38;5;245m",
+};
+
+/** Seeds a TUI render at a fixed width, mirroring the other parent tests. */
+function parentHarness(
+  t: { after: (fn: () => void) => void },
+  theme?: PiTheme,
+) {
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: undefined, PI_TPS_DIR: undefined });
+  const tmpDir = mkTmp(t);
+  const prev = process.stdout.columns;
+  process.stdout.columns = 120;
+  t.after(() => (process.stdout.columns = prev));
+  return { ...makeCtx("tui", true, theme), pi: makePi(), tmpDir };
+}
+
+test("the parent render tick resolves the four Pi theme colors and forwards them", async (t) => {
+  const roles: string[] = [];
+  const fg = (color: string, text: string): string => (
+    roles.push(color), `${THEME_PREFIXES[color] ?? ""}${text}\u001b[39m`
+  );
+  const { pi, ctx, calls, tmpDir } = parentHarness(t, { fg });
+  wireSession(pi, { ...fakeTimers(), tmpDir });
+  const model = { provider: "anthropic", id: "claude-3-5-haiku" };
+  await triggerSessionStart(pi, seededCtx(ctx, model, "low"));
+
+  // `foreground` maps onto Pi's `text` token; the other three are verbatim.
+  assert.deepEqual(roles.slice(0, 4), ["accent", "text", "muted", "dim"]);
+  const mainLine = (calls.setWidget[0].lines as string[])[1];
+  assert.ok(
+    mainLine.includes(THEME_PREFIXES.muted) &&
+      mainLine.includes(THEME_PREFIXES.text),
+  );
+  assert.ok(
+    mainLine.includes(`${THEME_PREFIXES.dim}(anthropic/claude-3-5-haiku:low)`),
+  );
+});
+
+test("the parent render tick passes no theme colors when ctx.ui.theme is absent", async (t) => {
+  const { pi, ctx, calls, tmpDir } = parentHarness(t);
+  wireSession(pi, { ...fakeTimers(), tmpDir });
+  await triggerSessionStart(pi, ctx);
+
+  const mainLine = (calls.setWidget[0].lines as string[])[1];
+  for (const prefix of Object.values(THEME_PREFIXES)) {
+    assert.equal(mainLine.includes(prefix), false, prefix);
+  }
+  assert.ok(mainLine.includes(ANSI_MUTED), "built-in dim is kept");
 });
