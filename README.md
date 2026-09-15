@@ -52,8 +52,6 @@ intentionally never displayed: a worker row is named by the raw correlated agent
 name, or by the honest fallback when correlation is ambiguous. The header aggregates
 derive only from the tracker and the live rows — nothing is fabricated.
 
-> Screenshots below are from the previous release and will be regenerated.
-
 ![Main agent TPS meter in the panel above the editor: gauge, live tok/s rate,
 12-turn sparkline, mean, and p95](docs/images/main-agent.png)
 
