@@ -37,4 +37,5 @@ Keep a completed gentle-pi worker visible for the configured 10-second persisten
 - Final independent verification confirmed the same 147/147 and 240/240 results with no code findings.
 - Native four-lens review approved and acknowledged for candidate `sha256:a9945f5d54e8cf0c3d61dfe5fe56635cd71dd12d10f5403989e19d93c581ac10` under lineage `review-88d05dd0f811a44e`.
 - Non-blocking follow-ups: deduplicate test fixtures and consider observability for terminal persistence failure.
-- Commit: pending delivery.
+- Implementation commit: `da3da78` (`fix: persist completed worker rows`).
+- Release version prepared: `0.2.1`; delivery pending.
