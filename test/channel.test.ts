@@ -16,6 +16,8 @@ import path from "node:path";
 import {
   OWNER_FILENAME,
   DIR_PREFIX,
+  TERMINAL_RETRY_ATTEMPTS,
+  TERMINAL_RETRY_DELAY_MS,
   createSessionDirectory,
   writeSnapshotAtomic,
   ThrottledPublisher,
@@ -254,7 +256,7 @@ test("significant transitions flush immediately and reset the throttle window", 
   );
 });
 
-test("shutdown cancels pending trailing writes and unlinks the worker snapshot", async (t) => {
+test("shutdown is destructive and synchronous, cancelling pending trailing writes", async (t) => {
   const base = makeBase(t);
   const dir = createSessionDirectory({ tmpDir: base });
   assert.ok(dir);
@@ -289,6 +291,362 @@ test("shutdown cancels pending trailing writes and unlinks the worker snapshot",
   assert.deepEqual(
     fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")),
     [],
+  );
+});
+
+test("finalizeTerminal writes the terminal snapshot and stops publication", async (t) => {
+  const base = makeBase(t);
+  const dir = createSessionDirectory({ tmpDir: base });
+  assert.ok(dir);
+  const pid = 4444;
+  const finalPath = path.join(dir, `worker-${pid}.json`);
+
+  const publisher = new ThrottledPublisher(dir, pid);
+  // Queue a throttled trailing write; finalization must cancel it.
+  publisher.publish(makeSnapshot({ pid, tps: 5 }));
+  publisher.publish(makeSnapshot({ pid, tps: 6 }));
+
+  const ok: unknown = publisher.finalizeTerminal(
+    makeSnapshot({ pid, phase: "complete", completedAt: Date.now(), tps: 0 }),
+  );
+
+  assert.strictEqual(
+    typeof ok,
+    "boolean",
+    "finalizeTerminal returns synchronously, not a promise",
+  );
+  assert.strictEqual(ok, true, "finalization reports success");
+  const parsed = JSON.parse(fs.readFileSync(finalPath, "utf8"));
+  assert.strictEqual(parsed.phase, "complete");
+  assert.strictEqual(parsed.tps, 0);
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")),
+    [],
+    "no residual temp file",
+  );
+
+  // Publication is closed: no later publish or finalize can rewrite the row.
+  const before = fs.readFileSync(finalPath, "utf8");
+  publisher.publish(makeSnapshot({ pid, tps: 999 }));
+  await delay(THROTTLE_MS + 50);
+  assert.strictEqual(
+    fs.readFileSync(finalPath, "utf8"),
+    before,
+    "closed publisher cannot rewrite the terminal snapshot",
+  );
+  assert.strictEqual(
+    publisher.finalizeTerminal(makeSnapshot({ pid, tps: 1000 })),
+    false,
+    "a second finalization is a no-op",
+  );
+});
+
+test("finalizeTerminal is synchronous: the terminal row exists when the call returns", (t) => {
+  const base = makeBase(t);
+  const dir = createSessionDirectory({ tmpDir: base });
+  assert.ok(dir);
+  const pid = 4445;
+  const finalPath = path.join(dir, `worker-${pid}.json`);
+
+  const publisher = new ThrottledPublisher(dir, pid);
+  // Queue a throttled trailing write; finalization cancels it.
+  publisher.publish(makeSnapshot({ pid, tps: 5 }));
+
+  // Deliberately no `await`: a process exit right after `agent_end` must find a
+  // persisted terminal row, never a pending promise or timer.
+  const result: unknown = publisher.finalizeTerminal(
+    makeSnapshot({ pid, phase: "complete", completedAt: Date.now(), tps: 0 }),
+  );
+
+  assert.strictEqual(
+    typeof result,
+    "boolean",
+    "finalizeTerminal returns a boolean, not a promise",
+  );
+  assert.strictEqual(result, true, "finalization reports success");
+  assert.ok(
+    fs.existsSync(finalPath),
+    "terminal snapshot is on disk before the call returns",
+  );
+  assert.strictEqual(
+    JSON.parse(fs.readFileSync(finalPath, "utf8")).phase,
+    "complete",
+  );
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")),
+    [],
+    "no residual temp file",
+  );
+});
+
+test("finalizeTerminal retries a Windows EBUSY rename synchronously and lands the snapshot", (t) => {
+  const base = makeBase(t);
+  const dir = createSessionDirectory({ tmpDir: base });
+  assert.ok(dir);
+  const pid = 7777;
+  const finalPath = path.join(dir, `worker-${pid}.json`);
+  const originalRename = fs.renameSync.bind(fs);
+  let calls = 0;
+  t.mock.method(fs, "renameSync", (src: string, dst: string) => {
+    calls += 1;
+    if (calls === 1) {
+      const err = new Error("EBUSY: resource busy or locked");
+      (err as NodeJS.ErrnoException).code = "EBUSY";
+      throw err;
+    }
+    return originalRename(src, dst);
+  });
+
+  // The synchronous wait is injected so the test observes retry pacing without
+  // sleeping and pins the no-op/spy seam production relies on.
+  const waits: number[] = [];
+  const publisher = new ThrottledPublisher(dir, pid, {
+    platform: "win32",
+    wait: (ms) => waits.push(ms),
+  });
+  const ok: unknown = publisher.finalizeTerminal(
+    makeSnapshot({ pid, phase: "complete", completedAt: Date.now(), tps: 0 }),
+  );
+
+  assert.strictEqual(
+    typeof ok,
+    "boolean",
+    "finalizeTerminal returns synchronously, not a promise",
+  );
+  assert.strictEqual(ok, true, "the bounded retry lands the terminal snapshot");
+  assert.ok(calls >= 2, "the busy rename was retried");
+  assert.deepEqual(
+    waits,
+    [TERMINAL_RETRY_DELAY_MS],
+    "one bounded synchronous wait precedes the retry",
+  );
+  assert.ok(
+    fs.existsSync(finalPath),
+    "terminal snapshot is on disk before the call returns",
+  );
+  const parsed = JSON.parse(fs.readFileSync(finalPath, "utf8"));
+  assert.strictEqual(parsed.phase, "complete");
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")),
+    [],
+    "no residual temp file after the retry",
+  );
+});
+
+test("default terminal retry uses a bounded synchronous wait, not a busy loop", (t) => {
+  const base = makeBase(t);
+  const dir = createSessionDirectory({ tmpDir: base });
+  assert.ok(dir);
+  const pid = 7002;
+  const originalRename = fs.renameSync.bind(fs);
+  let calls = 0;
+  t.mock.method(fs, "renameSync", (src: string, dst: string) => {
+    calls += 1;
+    if (calls === 1) {
+      const err = new Error("EBUSY: resource busy or locked");
+      (err as NodeJS.ErrnoException).code = "EBUSY";
+      throw err;
+    }
+    return originalRename(src, dst);
+  });
+
+  // No injected wait: the production default must itself block for the bounded
+  // delay and land the retry, proving the seam default is exercised.
+  const publisher = new ThrottledPublisher(dir, pid, { platform: "win32" });
+  const started = Date.now();
+  const ok: unknown = publisher.finalizeTerminal(
+    makeSnapshot({ pid, phase: "complete", completedAt: Date.now(), tps: 0 }),
+  );
+  const elapsed = Date.now() - started;
+
+  assert.strictEqual(typeof ok, "boolean", "synchronous boolean result");
+  assert.strictEqual(ok, true, "the default wait lands the retry");
+  assert.ok(
+    elapsed >= TERMINAL_RETRY_DELAY_MS - 5,
+    `default wait blocked for the retry delay (observed ${elapsed}ms)`,
+  );
+});
+
+test("finalizeTerminal unlinks a stale live snapshot after repeated write failures", async (t) => {
+  const base = makeBase(t);
+  const dir = createSessionDirectory({ tmpDir: base });
+  assert.ok(dir);
+  const pid = 7001;
+  const finalPath = path.join(dir, `worker-${pid}.json`);
+
+  const waits: number[] = [];
+  const publisher = new ThrottledPublisher(dir, pid, {
+    platform: "win32",
+    wait: (ms) => waits.push(ms),
+  });
+  // A live "tool" row is already on disk before finalization begins.
+  publisher.publish(
+    makeSnapshot({ pid, phase: "tool", activeTool: "bash", tps: 10 }),
+    { significant: true },
+  );
+  assert.ok(
+    fs.existsSync(finalPath),
+    "live snapshot is on disk before finalization",
+  );
+
+  let calls = 0;
+  t.mock.method(fs, "renameSync", () => {
+    calls += 1;
+    const err = new Error("EBUSY: resource busy or locked");
+    (err as NodeJS.ErrnoException).code = "EBUSY";
+    throw err;
+  });
+
+  const ok: unknown = publisher.finalizeTerminal(
+    makeSnapshot({ pid, phase: "complete", completedAt: Date.now(), tps: 0 }),
+  );
+
+  assert.strictEqual(
+    typeof ok,
+    "boolean",
+    "finalizeTerminal returns synchronously, not a promise",
+  );
+  assert.strictEqual(ok, false, "finalization reports failure");
+  assert.ok(
+    calls >= 1 + TERMINAL_RETRY_ATTEMPTS,
+    "the bounded retry budget was exhausted",
+  );
+  assert.deepEqual(
+    waits,
+    [
+      TERMINAL_RETRY_DELAY_MS,
+      TERMINAL_RETRY_DELAY_MS,
+      TERMINAL_RETRY_DELAY_MS,
+    ],
+    "exactly TERMINAL_RETRY_ATTEMPTS bounded waits precede the retries",
+  );
+  assert.strictEqual(
+    fs.existsSync(finalPath),
+    false,
+    "stale live snapshot is unlinked, never shown as completed",
+  );
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")),
+    [],
+    "no residual temp file after the failures",
+  );
+
+  // The call was synchronous, so nothing remains to fire later: no pending
+  // timer or pending snapshot may resurrect the stale row.
+  await delay(TERMINAL_RETRY_DELAY_MS * (TERMINAL_RETRY_ATTEMPTS + 2));
+  assert.strictEqual(
+    fs.existsSync(finalPath),
+    false,
+    "no late write resurrects a stale snapshot",
+  );
+});
+
+test("finalizeTerminal never throws when the injected wait hook throws and still cleans stale snapshots", (t) => {
+  const base = makeBase(t);
+  const dir = createSessionDirectory({ tmpDir: base });
+  assert.ok(dir);
+  const pid = 7003;
+  const finalPath = path.join(dir, `worker-${pid}.json`);
+
+  // A live "tool" row plus a residual temp file are already on disk before a
+  // faulting wait hook interrupts the bounded retry.
+  const publisher = new ThrottledPublisher(dir, pid, {
+    platform: "win32",
+    wait: () => {
+      throw new Error("injected wait hook fault");
+    },
+  });
+  publisher.publish(
+    makeSnapshot({ pid, phase: "tool", activeTool: "bash", tps: 10 }),
+    { significant: true },
+  );
+  const staleTmp = path.join(dir, `.worker-${pid}.stale.tmp`);
+  fs.writeFileSync(staleTmp, "stale");
+  assert.ok(
+    fs.existsSync(finalPath),
+    "live snapshot is on disk before finalization",
+  );
+
+  t.mock.method(fs, "renameSync", () => {
+    const err = new Error("EBUSY: resource busy or locked");
+    (err as NodeJS.ErrnoException).code = "EBUSY";
+    throw err;
+  });
+
+  let ok: unknown = "unset";
+  assert.doesNotThrow(() => {
+    ok = publisher.finalizeTerminal(
+      makeSnapshot({ pid, phase: "complete", completedAt: Date.now(), tps: 0 }),
+    );
+  }, "a throwing wait hook must not breach the module no-throw contract");
+
+  assert.strictEqual(
+    typeof ok,
+    "boolean",
+    "finalizeTerminal returns synchronously, not a promise",
+  );
+  assert.strictEqual(ok, false, "finalization reports failure");
+  assert.strictEqual(
+    fs.existsSync(finalPath),
+    false,
+    "stale live snapshot is unlinked even when the wait hook throws",
+  );
+  assert.strictEqual(
+    fs.existsSync(staleTmp),
+    false,
+    "residual temp snapshot is swept even when the wait hook throws",
+  );
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")),
+    [],
+    "no residual temp file remains",
+  );
+});
+
+test("finalizeTerminal still lands the terminal snapshot when the wait hook throws but the retry succeeds", (t) => {
+  const base = makeBase(t);
+  const dir = createSessionDirectory({ tmpDir: base });
+  assert.ok(dir);
+  const pid = 7004;
+  const finalPath = path.join(dir, `worker-${pid}.json`);
+  const originalRename = fs.renameSync.bind(fs);
+  let calls = 0;
+  t.mock.method(fs, "renameSync", (src: string, dst: string) => {
+    calls += 1;
+    if (calls === 1) {
+      const err = new Error("EBUSY: resource busy or locked");
+      (err as NodeJS.ErrnoException).code = "EBUSY";
+      throw err;
+    }
+    return originalRename(src, dst);
+  });
+
+  const publisher = new ThrottledPublisher(dir, pid, {
+    platform: "win32",
+    wait: () => {
+      throw new Error("injected wait hook fault");
+    },
+  });
+
+  let ok: unknown = "unset";
+  assert.doesNotThrow(() => {
+    ok = publisher.finalizeTerminal(
+      makeSnapshot({ pid, phase: "complete", completedAt: Date.now(), tps: 0 }),
+    );
+  }, "a throwing wait hook must not breach the module no-throw contract");
+
+  assert.strictEqual(
+    ok,
+    true,
+    "a faulting wait hook must not block a retry that would succeed",
+  );
+  assert.ok(calls >= 2, "the busy rename was retried despite the wait fault");
+  const parsed = JSON.parse(fs.readFileSync(finalPath, "utf8"));
+  assert.strictEqual(parsed.phase, "complete");
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")),
+    [],
+    "no residual temp file after the successful retry",
   );
 });
 

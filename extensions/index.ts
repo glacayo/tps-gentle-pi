@@ -309,11 +309,28 @@ function wireWorker(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
   const publisher = new ThrottledPublisher(sessionDir, process.pid);
 
   let closed = false;
+
+  /**
+   * Destructive teardown for crash and unexpected session shutdown. Cancels any
+   * pending publication and unlinks the worker snapshot.
+   */
   const shutdownWorker = (): void => {
     if (closed) return;
     closed = true;
-    tracker.complete();
     publisher.shutdown();
+  };
+
+  /**
+   * Graceful completion: mark the tracker complete and persist the terminal
+   * snapshot synchronously, so a process exit immediately after `agent_end`
+   * cannot race the write. Closing first means a late `session_shutdown` or
+   * process exit is a no-op and cannot erase a finalized snapshot.
+   */
+  const completeWorker = (): void => {
+    if (closed) return;
+    closed = true;
+    tracker.complete();
+    publisher.finalizeTerminal(tracker.snapshot());
   };
 
   const handle = (event: unknown): void => {
@@ -326,7 +343,9 @@ function wireWorker(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
   };
 
   wireTrackedEvents(pi, handle);
-  pi.on("agent_end", async () => shutdownWorker());
+  // Synchronous handler: the terminal snapshot is already persisted when
+  // `agent_end` returns, leaving no pending promise or timer to race exit.
+  pi.on("agent_end", () => completeWorker());
   pi.on("session_shutdown", async () => shutdownWorker());
 
   const onExit =
