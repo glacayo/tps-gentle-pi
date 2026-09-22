@@ -32,6 +32,7 @@ import {
   SPINNER_FRAMES,
 } from "../src/render.ts";
 import { EventTracker } from "../src/tracker.ts";
+import { COMPLETED_PERSIST_MS } from "../src/types.ts";
 
 // ---------------------------------------------------------------------------
 // Harness: mocked Pi API, extension context, fake timers, env/tmp isolation.
@@ -174,7 +175,17 @@ async function emit(
   ctx: unknown,
 ): Promise<void> {
   for (const handler of pi.handlers.get(event) ?? []) {
-    await handler(payload, ctx);
+    const result = handler(payload, ctx);
+    if (event === "agent_end") {
+      // Terminal persistence must be synchronous: a process exit immediately
+      // after `agent_end` must not race a pending promise or timer. Every
+      // agent_end lifecycle test therefore observes completion here.
+      assert.ok(
+        !(result instanceof Promise),
+        "agent_end handler leaves no pending asynchronous work",
+      );
+    }
+    await result;
   }
 }
 
@@ -315,19 +326,295 @@ test("worker role publishes a throttled snapshot and makes zero UI calls", (t) =
   assert.equal(parsed.phase, "tool");
   assert.equal(parsed.activeTool, "bash");
 
-  // agent_end unlinks the worker snapshot.
+  // agent_end publishes the terminal complete snapshot and keeps it on disk so
+  // the parent can render the completed row for its persistence window.
   void emit(pi, "agent_end", { type: "agent_end" }, ctx);
   assert.equal(
     fs.existsSync(snapshotFile),
-    false,
-    "snapshot unlinked on agent_end",
+    true,
+    "terminal snapshot is kept on agent_end",
   );
+  const terminal = JSON.parse(fs.readFileSync(snapshotFile, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(terminal.phase, "complete");
+  assert.equal("activeTool" in terminal, false, "active tool cleared");
 
   // Strict UI suppression across the entire worker lifecycle.
   assert.deepEqual(calls.setWidget, []);
   assert.deepEqual(calls.notify, []);
   assert.deepEqual(calls.confirm, []);
   assert.deepEqual(calls.setStatus, []);
+});
+
+test("agent_end publishes a terminal snapshot retained for the persistence window", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx, calls } = makeCtx("rpc", true);
+
+  // A controlled clock aligns the completion stamp with the guard's window.
+  let clockMs = 1_000_000;
+  const clock = (): number => clockMs;
+  wireSession(pi, { ...fakeTimers(), now: clock });
+  await triggerSessionStart(pi, ctx);
+
+  // Build live state: an open assistant message and an active tool.
+  await emit(
+    pi,
+    "message_start",
+    { type: "message_start", message: { role: "assistant" } },
+    ctx,
+  );
+  clockMs += 10;
+  await emit(
+    pi,
+    "message_update",
+    { type: "message_update", message: { role: "assistant", usage: { output: 8 } } },
+    ctx,
+  );
+  await emit(
+    pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "bash" },
+    ctx,
+  );
+
+  clockMs += 5;
+  await emit(pi, "agent_end", { type: "agent_end" }, ctx);
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  assert.ok(fs.existsSync(snapshotFile), "terminal snapshot stays on disk");
+  const terminal = JSON.parse(fs.readFileSync(snapshotFile, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(terminal.phase, "complete");
+  assert.equal(typeof terminal.completedAt, "number", "completion is stamped");
+  assert.equal(terminal.tps, 0, "no live TPS on a terminal snapshot");
+  assert.equal("activeTool" in terminal, false, "no active tool on completion");
+
+  // The guard retains the completed row inside its 10-second window...
+  const retained = readWorkerSnapshots(channelDir, { now: () => clockMs });
+  assert.equal(retained.length, 1, "completed row stays visible");
+  assert.equal(retained[0].phase, "complete");
+  assert.ok(fs.existsSync(snapshotFile), "still on disk inside the window");
+
+  // ...and evicts it once the window expires.
+  const expired = readWorkerSnapshots(channelDir, {
+    now: () => clockMs + COMPLETED_PERSIST_MS,
+  });
+  assert.equal(expired.length, 0, "completed row expires after the window");
+  assert.equal(fs.existsSync(snapshotFile), false, "expired snapshot unlinked");
+
+  // RPC worker stays silent across the whole lifecycle.
+  assert.deepEqual(calls.setWidget, []);
+  assert.deepEqual(calls.notify, []);
+  assert.deepEqual(calls.confirm, []);
+  assert.deepEqual(calls.setStatus, []);
+});
+
+// ---------------------------------------------------------------------------
+// TRIANGULATE (bugfix): non-completion teardown stays unchanged.
+// ---------------------------------------------------------------------------
+
+test("agent_end terminal persistence is synchronous and leaves no pending write", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx } = makeCtx("rpc", true);
+
+  wireSession(pi, { ...fakeTimers() });
+  await triggerSessionStart(pi, ctx);
+  await emit(
+    pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "bash" },
+    ctx,
+  );
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  assert.equal(fs.existsSync(snapshotFile), true, "live snapshot published");
+
+  const handlers = pi.handlers.get("agent_end") ?? [];
+  assert.equal(handlers.length, 1, "one agent_end handler is registered");
+  // Invoke without awaiting: the terminal row must already be persisted, and no
+  // promise may remain, when the handler returns.
+  const result = handlers[0]({ type: "agent_end" }, ctx);
+
+  assert.ok(
+    !(result instanceof Promise),
+    "agent_end returns before any asynchronous work remains",
+  );
+  assert.equal(
+    fs.existsSync(snapshotFile),
+    true,
+    "terminal snapshot persisted synchronously",
+  );
+  const terminal = JSON.parse(fs.readFileSync(snapshotFile, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal(terminal.phase, "complete");
+  assert.equal("activeTool" in terminal, false, "no active tool on completion");
+});
+
+test("worker crash before completion still unlinks the snapshot", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx } = makeCtx("rpc", true);
+
+  const exits: Array<() => void> = [];
+  wireSession(pi, {
+    ...fakeTimers(),
+    onProcessExit: (handler) => exits.push(handler),
+  });
+  await triggerSessionStart(pi, ctx);
+  await emit(
+    pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "bash" },
+    ctx,
+  );
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  assert.ok(fs.existsSync(snapshotFile), "snapshot published before the crash");
+  assert.equal(exits.length, 1, "the process exit handler is registered");
+
+  // Crash path: the exit handler runs before any graceful `agent_end`.
+  exits[0]();
+  assert.equal(
+    fs.existsSync(snapshotFile),
+    false,
+    "crash teardown still unlinks the snapshot",
+  );
+});
+
+test("worker session_shutdown without completion still cleans up the snapshot", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx } = makeCtx("rpc", true);
+
+  wireSession(pi, { ...fakeTimers() });
+  await triggerSessionStart(pi, ctx);
+  await emit(
+    pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "bash" },
+    ctx,
+  );
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  assert.ok(fs.existsSync(snapshotFile), "snapshot published");
+
+  await emit(pi, "session_shutdown", { reason: "quit" }, ctx);
+  assert.equal(
+    fs.existsSync(snapshotFile),
+    false,
+    "unexpected shutdown still unlinks the snapshot",
+  );
+});
+
+test("session_shutdown after graceful completion keeps the completed snapshot", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx } = makeCtx("rpc", true);
+
+  wireSession(pi, { ...fakeTimers() });
+  await triggerSessionStart(pi, ctx);
+  await emit(pi, "agent_end", { type: "agent_end" }, ctx);
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  assert.ok(fs.existsSync(snapshotFile), "terminal snapshot kept");
+
+  // A late shutdown must not defeat the persistence window.
+  await emit(pi, "session_shutdown", { reason: "quit" }, ctx);
+  assert.ok(
+    fs.existsSync(snapshotFile),
+    "completed snapshot survives a late session shutdown",
+  );
+});
+
+test("agent_end whose terminal write always fails leaves no stale live snapshot", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx, calls } = makeCtx("rpc", true);
+
+  wireSession(pi, { ...fakeTimers() });
+  await triggerSessionStart(pi, ctx);
+  await emit(
+    pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "bash" },
+    ctx,
+  );
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  assert.ok(fs.existsSync(snapshotFile), "live snapshot published");
+
+  // Every rename from here on fails, so the terminal write can never land.
+  t.mock.method(fs, "renameSync", () => {
+    const err = new Error("EBUSY: resource busy or locked");
+    (err as NodeJS.ErrnoException).code = "EBUSY";
+    throw err;
+  });
+
+  await emit(pi, "agent_end", { type: "agent_end" }, ctx);
+
+  assert.equal(
+    fs.existsSync(snapshotFile),
+    false,
+    "a failed terminal write unlinks the stale live row",
+  );
+  assert.deepEqual(
+    fs.readdirSync(channelDir).filter((f) => f.endsWith(".tmp")),
+    [],
+    "no residual temp file",
+  );
+  assert.equal(
+    readWorkerSnapshots(channelDir).length,
+    0,
+    "a failed completion is never rendered as a completed row",
+  );
+
+  assert.deepEqual(calls.setWidget, []);
+  assert.deepEqual(calls.setStatus, []);
+});
+
+test("process exit after graceful completion keeps the completed snapshot", async (t) => {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx } = makeCtx("rpc", true);
+
+  const exits: Array<() => void> = [];
+  wireSession(pi, {
+    ...fakeTimers(),
+    onProcessExit: (handler) => exits.push(handler),
+  });
+  await triggerSessionStart(pi, ctx);
+  await emit(pi, "agent_end", { type: "agent_end" }, ctx);
+
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+  assert.ok(fs.existsSync(snapshotFile), "terminal snapshot kept");
+
+  exits[0]();
+  assert.ok(
+    fs.existsSync(snapshotFile),
+    "a late process exit cannot erase a finalized completed snapshot",
+  );
 });
 
 // ---------------------------------------------------------------------------

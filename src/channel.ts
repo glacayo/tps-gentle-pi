@@ -1,5 +1,6 @@
 // Cross-process IPC channel: private session directory, atomic snapshot
-// publication, throttled writes, and worker snapshot cleanup.
+// publication, throttled writes, deterministic terminal finalization, and worker
+// snapshot cleanup.
 //
 // Every operation degrades silently — no function in this module throws. All
 // failures surface as `null` or a `WriteResult` status so the parent keeps its
@@ -43,6 +44,41 @@ export interface WriteOptions {
 
 export interface ThrottledPublisherOptions {
   platform?: string;
+  /**
+   * Synchronous bounded wait between terminal retry attempts. Tests inject a
+   * no-op or spy; production defaults to a Node-only `Atomics.wait`.
+   */
+  wait?: (ms: number) => void;
+}
+
+/**
+ * Bounded retry attempts for a terminal write blocked by a retryable Windows
+ * rename lock (`EBUSY`/`EPERM`). Terminal finalization is synchronous and the
+ * last publication that must survive process exit, so it performs a bounded
+ * blocking retry instead of rescheduling an unref'd throttle tick.
+ */
+export const TERMINAL_RETRY_ATTEMPTS = 3;
+
+/**
+ * Delay before each bounded terminal retry, in milliseconds. Worst-case
+ * synchronous blocking for one finalization is
+ * `TERMINAL_RETRY_ATTEMPTS * TERMINAL_RETRY_DELAY_MS` (120 ms) plus up to
+ * `TERMINAL_RETRY_ATTEMPTS + 1` synchronous write attempts.
+ */
+export const TERMINAL_RETRY_DELAY_MS = 40;
+
+/**
+ * Production wait between bounded terminal retries. `Atomics.wait` on a private
+ * `SharedArrayBuffer` blocks the current thread for at most `ms` without a busy
+ * loop; it is Node-only and legal on the main thread. A runtime without shared
+ * memory degrades to no wait rather than spinning.
+ */
+function boundedSyncWait(ms: number): void {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    // Hardened runtime without shared memory: skip the wait, never busy-loop.
+  }
 }
 
 export interface PublishOptions {
@@ -215,6 +251,7 @@ export class ThrottledPublisher {
   private readonly dir: string;
   private readonly pid: number;
   private readonly platform: string;
+  private readonly wait: (ms: number) => void;
 
   private pending: WorkerSnapshot | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -229,6 +266,7 @@ export class ThrottledPublisher {
     this.dir = dir;
     this.pid = pid;
     this.platform = options.platform ?? process.platform;
+    this.wait = options.wait ?? boundedSyncWait;
   }
 
   publish(snapshot: WorkerSnapshot, options: PublishOptions = {}): void {
@@ -259,13 +297,79 @@ export class ThrottledPublisher {
     }
   }
 
-  /** Cancels pending timers and unlinks the worker snapshot on normal shutdown. */
+  /**
+   * Destructive, synchronous teardown for crash and unexpected session
+   * shutdown. Cancels any pending timer, drops the pending snapshot, and
+   * unlinks the worker snapshot plus residual temp files. Idempotent: once the
+   * publisher is closed every call is a no-op.
+   */
   shutdown(): void {
     if (this.closed) return;
     this.closed = true;
     this.clearTimer();
     this.pending = null;
     unlinkWorkerSnapshot(this.dir, this.pid);
+  }
+
+  /**
+   * Deterministic, synchronous terminal finalization for graceful completion.
+   * It closes normal publication (`publish()` and `flush()` become no-ops),
+   * cancels any previous trailing timer and pending snapshot, then attempts to
+   * write `snapshot` as the terminal row. A retryable Windows rename lock
+   * (`EBUSY`/`EPERM`) triggers a small bounded blocking retry, injected through
+   * `ThrottledPublisherOptions.wait` (production uses a Node-only `Atomics.wait`),
+   * so persistence finishes before `agent_end` returns and a process exit cannot
+   * race it. It schedules no timer and returns no promise, so no asynchronous
+   * work survives the call.
+   *
+   * Worst-case synchronous blocking is
+   * `TERMINAL_RETRY_ATTEMPTS * TERMINAL_RETRY_DELAY_MS` (120 ms) plus up to
+   * `TERMINAL_RETRY_ATTEMPTS + 1` synchronous write attempts.
+   *
+   * Returns `true` when the terminal snapshot reached disk. On final failure it
+   * unlinks any pre-existing live snapshot and leaves no temp file, pending
+   * timer, or pending snapshot behind, so stale live data is never later
+   * rendered as completed. Calling it after the publisher is already closed is a
+   * no-op that returns `false`.
+   */
+  finalizeTerminal(snapshot: WorkerSnapshot): boolean {
+    if (this.closed) return false;
+    this.closed = true;
+    this.clearTimer();
+    this.pending = null;
+
+    const options: WriteOptions = { platform: this.platform };
+    let result = writeSnapshotAtomic(this.dir, this.pid, snapshot, options);
+
+    let retriesRemaining = TERMINAL_RETRY_ATTEMPTS;
+    while (result === "retry" && retriesRemaining > 0) {
+      retriesRemaining -= 1;
+      this.waitQuietlyForRetry(TERMINAL_RETRY_DELAY_MS);
+      result = writeSnapshotAtomic(this.dir, this.pid, snapshot, options);
+    }
+
+    if (result === "ok") return true;
+
+    // Final failure: never leave stale live data that could be read as a
+    // completed row, and sweep any temp file left by the failed renames.
+    unlinkWorkerSnapshot(this.dir, this.pid);
+    return false;
+  }
+
+  /**
+   * Paces one terminal retry without ever throwing. The injected
+   * `ThrottledPublisherOptions.wait` hook is a test seam (production defaults to
+   * the already-guarded `boundedSyncWait`), but a faulting hook must not breach
+   * this module's no-throw contract: a failed wait degrades to an immediate
+   * retry and leaves the bounded budget, the retry itself, and final-failure
+   * cleanup intact.
+   */
+  private waitQuietlyForRetry(ms: number): void {
+    try {
+      this.wait(ms);
+    } catch {
+      // A throwing wait hook is a seam fault, not a finalization failure.
+    }
   }
 
   private clearTimer(): void {
