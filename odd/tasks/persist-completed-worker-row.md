@@ -15,7 +15,7 @@ Keep a completed gentle-pi worker visible for the configured 10-second persisten
 - [x] Correct the readability mismatch around preserved retry timers.
 - [x] Make terminal snapshot retry deterministic without leaving a stale live snapshot or an unowned pending timer.
 - [x] Re-run focused/full verification and native four-lens review.
-- [ ] Commit, push, merge through issue #1, and release patch version 0.2.1 after approval.
+- [x] Commit, push, merge through issue #1, and release patch version 0.2.1 after approval.
 
 ## Constraints
 
@@ -38,4 +38,7 @@ Keep a completed gentle-pi worker visible for the configured 10-second persisten
 - Native four-lens review approved and acknowledged for candidate `sha256:a9945f5d54e8cf0c3d61dfe5fe56635cd71dd12d10f5403989e19d93c581ac10` under lineage `review-88d05dd0f811a44e`.
 - Non-blocking follow-ups: deduplicate test fixtures and consider observability for terminal persistence failure.
 - Implementation commit: `da3da78` (`fix: persist completed worker rows`).
-- Release version prepared: `0.2.1`; delivery pending.
+- Release commit: `8aa9558` (`chore: prepare v0.2.1`).
+- PR #2 merged as `600e5bb`; issue #1 closed.
+- Annotated tag and GitHub Release: `v0.2.1`.
+- GitHub Actions publish run `35682729500` succeeded; npm `latest` resolves to `0.2.1`.
