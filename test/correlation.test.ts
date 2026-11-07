@@ -565,3 +565,87 @@ test("a completed row carries no tool or live rate forward from its prior snapsh
   assert.equal(row.tps, 0, "a finished worker shows no live rate");
   assert.equal(row.avgTps, 50, "500 tokens over 10 seconds");
 });
+
+// ---------------------------------------------------------------------------
+// T2: a retained terminal snapshot never borrows a different, active task's
+// identity. Only a live worker can be the single active task because no public
+// Shell contract exposes a taskId <-> PID/childSessionId join (see the module
+// header): a finished worker is display-only and keeps the honest fallback.
+// ---------------------------------------------------------------------------
+
+/** A finished worker snapshot the parent still renders during its retention window. */
+function retainedTerminal(overrides = {}) {
+  return snapshot({
+    phase: "complete",
+    startTime: T0,
+    completedAt: T0 + 20_000,
+    tps: 0,
+    activeTool: undefined,
+    totalTokens: 1000,
+    ...overrides,
+  });
+}
+
+/** Registers a finished task `t1` and a new, still-running task `t2`. */
+function engineWithNewActiveTask() {
+  const engine = new CorrelationEngine();
+  engine.handleToolCall(runCall("c1", { agent: "old-scout" }));
+  engine.handleToolResult(
+    runResult("c1", { taskId: "t1", agent: "old-scout", status: "completed" }),
+  );
+  engine.handleToolCall(runCall("c2", { agent: "architect" }));
+  engine.handleToolResult(
+    runResult("c2", { taskId: "t2", agent: "architect", status: "running" }),
+  );
+  return engine;
+}
+
+test("a retained complete snapshot never borrows the new active task's identity", () => {
+  const engine = engineWithNewActiveTask();
+
+  const [row] = engine.correlate([retainedTerminal()]);
+  assert.equal(row.phase, "complete");
+  assert.equal(row.badge, undefined, "no badge from a different, active task");
+  assert.equal(row.taskId, undefined, "no taskId from a different, active task");
+  assert.equal(row.avgTps, 50, "the terminal wall average still renders");
+  assert.equal(row.tokens, 1000, "terminal stats stay present");
+  assert.equal(engine.activeTasks()[0].taskId, "t2", "the new task stays tracked");
+});
+
+test("a live worker beside a retained complete row keeps the badge while the terminal row falls back", () => {
+  const engine = engineWithNewActiveTask();
+
+  const [retained, live] = engine.correlate([
+    retainedTerminal(),
+    snapshot({ phase: "streaming", tps: 30 }),
+  ]);
+  assert.equal(retained.phase, "complete");
+  assert.equal(retained.badge, undefined, "the old row never takes the new badge");
+  assert.equal(retained.taskId, undefined, "the old row never takes the new taskId");
+  assert.equal(retained.avgTps, 50);
+  assert.equal(live.badge, "architect", "the only live worker owns the single task");
+  assert.equal(live.taskId, "t2");
+  assert.equal(live.tps, 30);
+});
+
+test("two live workers beside a retained complete row stay metrics-only", () => {
+  const engine = engineWithNewActiveTask();
+  engine.handleToolCall(runCall("c3", { agent: "reviewer" }));
+  engine.handleToolResult(
+    runResult("c3", { taskId: "t3", agent: "reviewer", status: "running" }),
+  );
+
+  const rows = engine.correlate([
+    retainedTerminal(),
+    snapshot({ phase: "streaming" }),
+    snapshot({ phase: "tool", activeTool: "read" }),
+  ]);
+  assert.equal(rows.length, 3);
+  for (const row of rows) {
+    assert.equal(row.badge, undefined, "ambiguous concurrency stays fallback");
+    assert.equal(row.taskId, undefined);
+  }
+  assert.equal(rows[0].avgTps, 50, "the terminal row keeps its own stats");
+  assert.equal(rows[1].phase, "streaming");
+  assert.equal(rows[2].activeTool, "read");
+});

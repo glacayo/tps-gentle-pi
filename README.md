@@ -4,9 +4,9 @@ A live tokens-per-second (TPS) meter for the [Pi coding agent](https://pi.dev). 
 draws a compact two-part panel above the editor: a **header line** with the turn
 sparkline, last rate, mean (`μ`), P² p95, participant counts, and panel-wide rate
 and token totals, plus one **row per participant** — the main agent and each
-[gentle-pi](https://www.npmjs.com/package/gentle-pi) subagent whose correlation
-evidence is deterministic. It is a zero-build TypeScript package: Node 24 executes
-the sources directly, and nothing is compiled.
+[gentle-pi](https://www.npmjs.com/package/gentle-pi) subagent whose live
+correlation evidence is deterministic. It is a zero-build TypeScript package:
+Node 24 executes the sources directly, and nothing is compiled.
 
 > **Answer:** the meter works on **vanilla Pi** (no gentle-pi) with zero
 > subagent rows, and degrades silently — a channel or aggregation failure never
@@ -41,16 +41,19 @@ Throughput ▂▃▄▅▄▅▆▆▇▇██  58.0 tok/s  μ 38.2  p95 51.0  
 | --- | --- |
 | Header | `Throughput` + 12-turn sparkline, last `tok/s`, `μ`, `p95`, `N active`, `N streaming`, panel `tok/s total`, total `tok` |
 | Main row | phase icon, `Main` (or `Main [tool: x]`), `provider/id:thinking` at standard and wide, hybrid gauge, `tok/s`, `· N tok` at standard and wide |
-| Subagent row | tree glyph + phase icon, raw correlated agent name or honest `subagent` / `subagent · <pid>` fallback, `provider/id:thinking` at standard and wide, hybrid gauge, `tok/s`, phase/tool state, `· N tok` at standard and wide |
+| Subagent row (live) | tree glyph + phase icon, raw correlated agent name or honest `subagent` / `subagent · <pid>` fallback, `provider/id:thinking` at standard and wide, hybrid gauge, `tok/s`, phase/tool state, `· N tok` at standard and wide |
+| Subagent row (completed) | `✓`, honest `subagent` / `subagent · <pid>` fallback name, `provider/id:thinking` at standard and wide, `wall avg N tok/s`, `· N tok` |
 
 The gauge is **hybrid**: the denominator is `max(fastest live row, 150)` tok/s. While
 every participant stays below 150 tok/s, each bar is an absolute magnitude reading on
 the fixed 150 tok/s scale, so a quiet panel never looks busy. As soon as one
 participant exceeds 150 tok/s, the fastest row fills the bar and the rest compare
 against it, so the panel keeps showing relative shape at high speed. Task titles are
-intentionally never displayed: a worker row is named by the raw correlated agent
-name, or by the honest fallback when correlation is ambiguous. The header aggregates
-derive only from the tracker and the live rows — nothing is fabricated.
+intentionally never displayed: a live worker row is named by the raw correlated agent
+name, or by the honest fallback when correlation is ambiguous. A worker that finishes
+stays visible briefly as a `✓` row: it drops the gauge and reports its wall-clock
+average instead of a live rate. The header aggregates derive only from the tracker and
+the live rows — nothing is fabricated.
 
 ![Main agent TPS meter in the panel above the editor: gauge, live tok/s rate,
 12-turn sparkline, mean, and p95](docs/images/main-agent.png)
@@ -68,8 +71,22 @@ derive only from the tracker and the live rows — nothing is fabricated.
 | Main meter | Live TPS from output deltas since the first delta, preferring provider-reported usage and falling back to a `ceil(chars / 4)` estimate. Authoritative usage is recorded at message end and pushed into the sparkline, mean, and P² p95. |
 | Roles | `session_start` selects `parent-tui` (TUI + no child marker), `gentle-worker` (child marker + inherited channel), or `headless-noop`. |
 | Subagent channel | The parent creates one private, unpredictable session directory; each worker publishes a throttled, atomic, schema-validated snapshot. The parent aggregates only live snapshots. |
-| Identity | The row name is the raw correlated agent name (`agent`), shown only when exactly one worker and one active task match. Otherwise the row uses an honest fallback (`subagent` / `subagent · <pid>`) and never guesses. Task titles are never rendered. |
-| Completion | `agent_end` marks the worker complete and writes its terminal row synchronously, which legacy hosts never follow with more events. A later `agent_start` or assistant turn reopens the same worker row with a fresh publisher and no completion stamp, so retries and continuations stay live. `agent_settled` is consumed as the definitive close when the host actually emits it; a host that never does keeps the `agent_end` behavior. Late tool-only transitions never reopen a completed row, and cumulative session tokens carry across runs. |
+| Identity | The row name is the raw correlated agent name (`agent`), shown only on the single **live** worker when exactly one worker is live and exactly one task is active. Every other shape — concurrent workers, a worker/task count mismatch, a worker without a task, or a **retained completed row** — uses an honest fallback (`subagent` / `subagent · <pid>`) and never guesses. No public Shell contract exposes a taskId ↔ PID/childSessionId join, so a finished worker's own task name is unknown and is never filled in from currently active work. Task titles are never rendered. |
+| Completion | `agent_end` marks the worker complete and writes its terminal row synchronously, which legacy hosts never follow with more events. A later `agent_start` or assistant turn reopens the same worker row with a fresh publisher and no completion stamp, so retries and continuations stay live. `agent_settled` is consumed as the definitive close when the host actually emits it; a host that never does keeps the `agent_end` behavior. Late tool-only transitions never reopen a completed row, and cumulative session tokens carry across runs. A completed row reports `wall avg`, never a live `tok/s`. |
+
+## Metrics semantics
+
+Three different numbers share the panel, so the labels name what each one measures:
+
+| Shown as | Meaning |
+| --- | --- |
+| `N tok/s` | Live **generation** throughput of the current turn: provider-reported usage when available, otherwise the `ceil(chars / 4)` estimate. |
+| `wall avg N tok/s` | Completed rows only: cumulative worker-session output tokens ÷ the worker session's wall-clock lifetime (`startTime` → `completedAt`). It includes idle waits and tool time, so it is **not** a per-task figure and not a pure decode rate. A resumed worker session keeps accumulating, so the value covers every run of that session. |
+| last `tok/s`, `μ`, `p95`, `tok/s total` | Header aggregates: the last completed turn's rate, the incremental mean and P² p95 over that turn history, and the live rates summed across participants. |
+
+A completed row with no observed average (for example a terminal snapshot without a
+completion timestamp) falls back to its last live rate and keeps the plain `avg`
+label, so a wall-clock claim is never fabricated.
 
 ## Installation and child visibility
 
@@ -148,6 +165,6 @@ npm test
 | --- | --- |
 | Main meter works, no subagent rows | Install as a package (`pi install npm:tps-gentle-pi`) instead of a `pi -e` load, so children inherit the extension. |
 | Panel never appears | Ensure the session is a TUI session (`ctx.mode === "tui"`); headless/RPC sessions are silent by design. |
-| Row labels show `subagent · <pid>` | Correlation evidence is ambiguous; this is the honest fallback, not a bug. Run only one delegated task to get a badge. |
+| Row labels show `subagent · <pid>` | Correlation evidence is ambiguous — concurrent workers, a count mismatch, or a retained completed row that never borrows a live task's name. This is the honest fallback, not a bug. Run only one delegated task to get a badge. |
 | Lines look truncated on a narrow terminal | The panel clamps adaptively (wide ≥ 120, standard 80–119, narrow 60). Fields hide deterministically rather than overflowing. |
 | `npm test` fails with a module-not-found | Use Node 24 (`node --test` runs `.ts` natively via type stripping); no build step is required. |
