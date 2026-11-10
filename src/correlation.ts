@@ -9,11 +9,15 @@
 // module tracks the task lifecycle from those events and joins tracked tasks to
 // live worker snapshots using exactly two regimes:
 //
-//   * Regime A — exactly one live worker AND exactly one active task: the row
-//     is named with the task's observed `agent` badge (safe because only one
-//     delegated worker exists in the whole session). The task `label` stays in
-//     the engine and is never rendered.
-//   * Regime B — two or more workers, or a worker/task count mismatch, or a
+//   * Regime A — exactly one **live** worker AND exactly one active task: the
+//     row is named with the task's observed `agent` badge (safe because only one
+//     delegated worker is running in the whole session). The task `label` stays
+//     in the engine and is never rendered. A retained `complete` snapshot is
+//     display-only: it is not a live worker, so it never receives the active
+//     task's badge or `taskId`. There is no supported taskId <-> PID /
+//     childSessionId join in the public Shell contracts, so a terminal row keeps
+//     the honest fallback name and only its own metrics.
+//   * Regime B — two or more live workers, or a worker/task count mismatch, or a
 //     worker without a registered task: every row renders only verified worker
 //     runtime facts with a neutral `subagent` / `subagent · <pid>` label. The
 //     engine never guesses by launch order, process timestamp, or FIFO queue.
@@ -47,7 +51,12 @@ type UnknownRecord = Record<string, unknown>;
 
 /** A renderable worker row enriched with the correlated task identity (Regime A). */
 export interface CorrelatedWorker extends WorkerRow {
-  /** Matched task id; only present under the deterministic Regime A join. */
+  /**
+   * Matched task id; only present on a live row under the deterministic Regime A
+   * join. A retained `complete` row never carries it: the public Shell contracts
+   * expose no taskId <-> PID/childSessionId join, so a terminal row's history is
+   * unknown and is never inferred from currently active work.
+   */
   taskId?: string;
 }
 
@@ -399,21 +408,25 @@ export class CorrelationEngine {
   }
 
   /**
-   * Joins live worker snapshots to tracked tasks. Exactly one worker and one
+   * Joins live worker snapshots to tracked tasks. Exactly one live worker and one
    * active task yields the deterministic Regime A enrichment (the raw agent
    * badge becomes the row name; the task label is never copied into the row);
    * every other shape yields honest Regime B fallback rows with identity
-   * omitted. The worker's own `thinkingLevel` is a verified runtime fact and is
-   * carried in both regimes.
+   * omitted. A retained `complete` snapshot is display-only: it is excluded from
+   * the live-worker count and never borrows the active task's badge or `taskId`,
+   * because no public contract exposes a taskId <-> PID/childSessionId join. The
+   * worker's own `thinkingLevel` is a verified runtime fact and is carried in
+   * both regimes.
    *
    * Anti-flicker: a `activeTool` or `tps` that vanished during a phase transition
    * within `STABILIZE_MS` is carried forward from the last observation of the same
    * PID, token counts never move backwards, and a `complete` snapshot additionally
-   * carries `completedAt` plus the mean rate derived from its own timestamps.
+   * carries `completedAt` plus its own wall-clock average (`avgTps`).
    */
   correlate(workers: WorkerSnapshot[]): CorrelatedWorker[] {
     const active = this.activeTasks();
-    const deterministic = workers.length === 1 && active.length === 1;
+    const live = workers.filter((snapshot) => snapshot.phase !== "complete");
+    const deterministic = live.length === 1 && active.length === 1;
     const matched = deterministic ? active[0] : undefined;
     const now = this.now();
 
@@ -466,7 +479,11 @@ export class CorrelationEngine {
         model: snapshot.model,
       };
 
-      // Completed rows report what the worker achieved instead of a live rate.
+      // Completed rows report what this worker session achieved instead of a live
+      // generation rate. `avgTps` is a wall-clock average: the cumulative session
+      // token total divided by the worker session's lifetime (`startTime` ->
+      // `completedAt`), which includes idle waits, tool time, and every run of a
+      // resumed worker session. It is never a per-task or pure decode rate.
       if (finished && snapshot.completedAt !== undefined) {
         row.completedAt = snapshot.completedAt;
         const elapsedSeconds =
@@ -480,7 +497,9 @@ export class CorrelationEngine {
           : sanitizeText(snapshot.thinkingLevel);
       if (thinking !== "") row.thinkingLevel = thinking;
 
-      if (matched !== undefined) {
+      // Identity enrichment is reserved for live workers: a retained terminal row
+      // must never borrow the identity of a different, currently active task.
+      if (matched !== undefined && !finished) {
         const badge = sanitizeText(matched.agent);
         if (badge !== "") row.badge = badge;
         // The tracked task `label` stays in the engine; the render row never

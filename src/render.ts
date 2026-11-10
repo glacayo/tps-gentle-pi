@@ -48,6 +48,13 @@ export const SPINNER_FRAME_MS = 80;
 const IDLE_ICON = "·";
 /** Glyph for a finished (`complete`) phase. */
 const COMPLETE_ICON = "✓";
+/**
+ * Label for a terminal-row rate that is a session-lifetime wall-clock average
+ * (`avgTps`), never the live generation rate a live `tok/s` row shows.
+ */
+const WALL_AVERAGE_LABEL = "wall avg";
+/** Label for a terminal row that only observed a last live rate, not an average. */
+const LAST_RATE_LABEL = "avg";
 
 export type PanelBreakpoint = "wide" | "standard" | "narrow";
 
@@ -66,9 +73,14 @@ export interface PanelStats {
  activeTool?: string;
  /** Session cumulative output tokens; drawn as `· N tok` on standard and wide. */
  totalTokens?: number;
- /** Completion timestamp; present when the main agent reached `complete`. */
+ /**
+  * Completion timestamp; present when the main agent reached `complete`.
+  */
  completedAt?: number;
- /** Mean tokens/second over the session; drawn in place of the gauge when complete. */
+ /**
+  * Session-lifetime mean tokens/second (wall-clock), drawn in place of the gauge
+  * when complete. It is never a live generation rate or a per-task figure.
+  */
  avgTps?: number;
 }
 
@@ -78,7 +90,8 @@ export interface WorkerRow {
  pid?: number;
  /**
   * Correlated raw agent name (e.g. `scout`); sanitized and truncated to 20
-  * visible chars, it is the row's name. A task label is never rendered.
+  * visible chars, it is the row's name. A task label is never rendered. Only a
+  * live row can carry it; a completed row keeps the honest fallback name.
   */
  badge?: string;
  tps: number;
@@ -90,7 +103,12 @@ export interface WorkerRow {
  thinkingLevel?: string;
  /** Completion timestamp of the worker; present when `phase` is `complete`. */
  completedAt?: number;
- /** Mean tokens/second over the worker's lifetime; drawn when `phase` is `complete`. */
+ /**
+  * Wall-clock average for the completed worker session: cumulative session tokens
+  * divided by the session lifetime (`startTime` -> `completedAt`), including idle
+  * waits and tool time. Drawn when `phase` is `complete`; it is not a per-task or
+  * pure generation rate.
+  */
  avgTps?: number;
 }
 
@@ -236,17 +254,20 @@ function workerState(row: WorkerRow): string {
 }
 
 /**
- * Completed-row metric segments shared by the main and worker rows: the average rate
- * (`avg N tok/s`) followed by the token total, replacing the gauge and phase/tool state a
- * live row shows. `rate` falls back to the last live rate when no average was correlated.
+ * Completed-row metric segments shared by the main and worker rows: the wall-clock
+ * average rate (`wall avg N tok/s`) followed by the token total, replacing the gauge
+ * and phase/tool state a live row shows. `label` names what the rate actually is: a
+ * computed session-lifetime average (`wall avg`) or, when no average was observed, the
+ * last live generation rate (`avg`).
  */
 function completedMetrics(
+ label: string,
  rate: number,
  tokens: number,
  theme?: PanelTheme,
 ): Segment[] {
  return [
-  segment(recolor(`avg ${formatRate(rate)}`, theme?.foreground)),
+  segment(recolor(`${label} ${formatRate(rate)}`, theme?.foreground)),
   segment(recolor(`· ${formatTokens(tokens)}`, theme?.muted)),
  ];
 }
@@ -362,7 +383,8 @@ export function renderHeader(
  * ceiling (the larger of the panel's live maximum and the absolute scale).
  *
  * A `complete` phase switches to the completed path above: identity and model are
- * kept, the gauge and live rate are replaced by `avg N tok/s` and the token total.
+ * kept, the gauge and live rate are replaced by `wall avg N tok/s` (the session
+ * wall-clock average) and the token total.
  */
 export function renderMainRow(
  stats: PanelStats,
@@ -383,13 +405,23 @@ export function renderMainRow(
   if (model !== null) segments.push(model);
  }
  if (stats.phase === "complete") {
-  // Completed main row: average rate + session tokens, no gauge. The main agent does
-  // not complete in the current wiring, so this path only has to degrade gracefully.
+  // Completed main row: wall-clock average + session tokens, no gauge. The main agent
+  // does not complete in the current wiring, so this path only has to degrade
+  // gracefully; without an observed average it reports the last live rate instead.
   const tokens = Number.isFinite(stats.totalTokens)
    ? (stats.totalTokens as number)
    : 0;
+  const average = stats.avgTps;
   return compose(
-   [...segments, ...completedMetrics(stats.avgTps ?? stats.tps, tokens, theme)],
+   [
+    ...segments,
+    ...completedMetrics(
+     average === undefined ? LAST_RATE_LABEL : WALL_AVERAGE_LABEL,
+     average ?? stats.tps,
+     tokens,
+     theme,
+    ),
+   ],
    cols,
   );
  }
@@ -418,7 +450,8 @@ export function renderMainRow(
  *
  * A `complete` phase switches to the completed path above: the icon is `✓`, the
  * identity and dimmed model are kept, the gauge and phase/tool state are dropped,
- * and the row closes with `avg N tok/s` plus the token total at every breakpoint.
+ * and the row closes with `wall avg N tok/s` (the session wall-clock average) plus
+ * the token total at every breakpoint.
  */
 export function renderSubagentRow(
  row: WorkerRow,
@@ -442,10 +475,20 @@ export function renderSubagentRow(
   if (model !== null) segments.push(model);
  }
  if (row.phase === "complete") {
-  // Completed worker row: identity, dimmed model, average rate, and the token total.
-  // No gauge and no phase/tool state text: a finished worker has no live reading.
+  // Completed worker row: identity, dimmed model, wall-clock average, and the token
+  // total. No gauge and no phase/tool state text: a finished worker has no live
+  // reading. Without an observed average it reports the last live rate instead.
+  const average = row.avgTps;
   return compose(
-   [...segments, ...completedMetrics(row.avgTps ?? row.tps, row.tokens, theme)],
+   [
+    ...segments,
+    ...completedMetrics(
+     average === undefined ? LAST_RATE_LABEL : WALL_AVERAGE_LABEL,
+     average ?? row.tps,
+     row.tokens,
+     theme,
+    ),
+   ],
    cols,
   );
  }
