@@ -64,7 +64,12 @@ export interface WorkerSnapshot {
  messageTokens: number;
  /** Total cumulative output tokens for this worker session */
  totalTokens: number;
- /** Completion timestamp if phase === "complete" */
+ /**
+  * Completion timestamp if phase === "complete". With `startTime` it bounds the
+  * worker-session wall-clock lifetime the parent uses for the terminal average
+  * (`totalTokens / (completedAt - startTime)`): cumulative tokens over elapsed
+  * wall time, including idle waits and tool time, not a per-task decode rate.
+  */
  completedAt?: number;
 }
 
@@ -75,6 +80,11 @@ export type TaskStatus = "pending" | "running" | "completed" | "cancelled";
 export interface TrackedTask {
  taskId: string;
  agent: string;
+ /**
+  * Delegation label kept engine-side only. It is never rendered, and it is never
+  * used to infer a completed worker's historical identity: the public Shell
+  * contracts expose no taskId <-> PID/childSessionId join.
+  */
  label?: string;
  mode: TaskMode;
  status: TaskStatus;

@@ -32,7 +32,7 @@ import {
   SPINNER_FRAMES,
 } from "../src/render.ts";
 import type { PanelStats, PanelTheme } from "../src/render.ts";
-import { EventTracker } from "../src/tracker.ts";
+import { EventTracker, isAssistantMessageStart } from "../src/tracker.ts";
 import type { ExtensionRole } from "../src/types.ts";
 
 /** Canonical refresh interval for the panel, in milliseconds. */
@@ -61,6 +61,17 @@ const SIGNIFICANT_TRANSITIONS = new Set<string>([
   "tool_execution_end",
   "message_end",
 ]);
+
+/**
+ * True when an event proves another run started in the same worker session.
+ * `agent_start` states it directly; an assistant `message_start` is the same
+ * evidence for a host that emits only message activity. Tool-only events never
+ * qualify, so a late transition cannot resurrect a finalized row.
+ */
+function startsNewRun(event: unknown): boolean {
+  const type = (event as { type?: unknown } | null)?.type;
+  return type === "agent_start" || isAssistantMessageStart(event);
+}
 
 /** Minimal structural surface of the active Pi TUI theme. */
 interface MeterTheme {
@@ -306,13 +317,18 @@ function wireWorker(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
   // Seed before any tracked event can publish, so the first snapshot carries the
   // session's model and thinking level (no model_select event arrives at startup).
   seedTrackerFromContext(tracker, ctx);
-  const publisher = new ThrottledPublisher(sessionDir, process.pid);
+  let publisher = new ThrottledPublisher(sessionDir, process.pid);
 
+  /** Destructive teardown ran: no further publication is ever allowed. */
   let closed = false;
+  /** The current run already wrote its terminal row and is not reopened. */
+  let completed = false;
 
   /**
    * Destructive teardown for crash and unexpected session shutdown. Cancels any
-   * pending publication and unlinks the worker snapshot.
+   * pending publication and unlinks the worker snapshot. After a graceful
+   * completion the publisher is already closed, so a late shutdown or process
+   * exit stays a no-op and cannot erase a finalized snapshot.
    */
   const shutdownWorker = (): void => {
     if (closed) return;
@@ -323,22 +339,40 @@ function wireWorker(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
   /**
    * Graceful completion: mark the tracker complete and persist the terminal
    * snapshot synchronously, so a process exit immediately after `agent_end`
-   * cannot race the write. Closing first means a late `session_shutdown` or
-   * process exit is a no-op and cannot erase a finalized snapshot.
+   * cannot race the write. Idempotent per run: once this run is terminal, a
+   * repeated `agent_end` or a later `agent_settled` leaves the row untouched.
    */
   const completeWorker = (): void => {
-    if (closed) return;
-    closed = true;
+    if (closed || completed) return;
+    completed = true;
     tracker.complete();
     publisher.finalizeTerminal(tracker.snapshot());
   };
 
+  /**
+   * Reopens publication when the host starts another run in the same worker
+   * session (retry, continuation, or queued follow-up). The previous publisher is
+   * closed after its terminal write, so resuming uses a fresh one, and the tracker
+   * drops its completion stamp while keeping cumulative session metrics. Only
+   * genuine run evidence reaches here, so a late tool transition cannot reopen a
+   * finalized row.
+   */
+  const resumeWorker = (): void => {
+    completed = false;
+    tracker.resume();
+    publisher = new ThrottledPublisher(sessionDir, process.pid);
+  };
+
   const handle = (event: unknown): void => {
     if (closed) return;
+    const reactivated = completed && startsNewRun(event);
+    if (completed && !reactivated) return;
+    if (reactivated) resumeWorker();
     tracker.handle(event);
     const type = (event as { type?: unknown }).type;
     const significant =
-      typeof type === "string" && SIGNIFICANT_TRANSITIONS.has(type);
+      reactivated ||
+      (typeof type === "string" && SIGNIFICANT_TRANSITIONS.has(type));
     publisher.publish(tracker.snapshot(), { significant });
   };
 
@@ -346,6 +380,13 @@ function wireWorker(pi: MeterApi, ctx: MeterCtx, deps: WireDeps): void {
   // Synchronous handler: the terminal snapshot is already persisted when
   // `agent_end` returns, leaving no pending promise or timer to race exit.
   pi.on("agent_end", () => completeWorker());
+  // A run boundary is not a terminal state on current hosts, where `agent_end`
+  // may precede a retry or continuation. The next run reopens through `handle`.
+  pi.on("agent_start", async (event) => handle(event));
+  // `agent_settled` is definitive, but only when it is actually observed:
+  // accepting the registration is not capability evidence, so a host that never
+  // emits it keeps the legacy `agent_end` terminal write above.
+  pi.on("agent_settled", () => completeWorker());
   pi.on("session_shutdown", async () => shutdownWorker());
 
   const onExit =

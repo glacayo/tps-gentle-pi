@@ -122,6 +122,16 @@ function isAssistantTurn(event: UnknownRecord): boolean {
 }
 
 /**
+ * True when `event` is an assistant `message_start` — exactly the evidence the
+ * tracker records as a new streaming turn. Exported so the wiring reopens a
+ * completed worker only on activity this tracker would actually count.
+ */
+export function isAssistantMessageStart(event: unknown): boolean {
+  const rec = asRecord(event);
+  return rec !== null && rec.type === "message_start" && isAssistantTurn(rec);
+}
+
+/**
  * Reads the model label. A model object carrying both a non-empty `provider` and
  * `id` yields the qualified `provider/id`; otherwise the compact `id` (design §5
  * example), a plain string model, or `modelName`/`modelId` is used.
@@ -292,6 +302,20 @@ export class EventTracker {
     this.completedAt = this.now();
     this.liveTps = 0;
     this.activeTool = undefined;
+  }
+
+  /**
+   * Reopens a completed tracker when the host starts another run in the same
+   * worker session (retry, continuation, or queued follow-up). Cumulative
+   * session counters, the sparkline/mean/P² sketch, and `startTime` are kept so
+   * worker-session metrics stay intact; only the completion stamp and terminal
+   * phase are cleared. A tracker that is not complete is left untouched.
+   */
+  resume(): void {
+    if (this.phase !== "complete") return;
+    this.completedAt = undefined;
+    this.phase = "waiting";
+    this.liveTps = 0;
   }
 
   private totalTokens(): number {

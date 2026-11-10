@@ -779,7 +779,7 @@ test("an absent or partial theme keeps the built-in colors and the plain layout"
 });
 
 // ---------------------------------------------------------------------------
-// WU-5: completed rows (✓ + average rate + tokens, no gauge)
+// WU-5: completed rows (✓ + wall-clock average + tokens, no gauge)
 // ---------------------------------------------------------------------------
 
 /** A finished worker row: the shape `correlate` produces for `phase: "complete"`. */
@@ -796,11 +796,15 @@ const DONE = {
 /** The 16-cell gauge track; a completed row must never draw it. */
 const TRACK_16 = TRACK.repeat(16);
 
-test("a completed worker row shows ✓, the average rate and tokens, and no gauge", () => {
+test("a completed worker row shows ✓, the wall average and tokens, and no gauge", () => {
   const line = renderSubagentRow(DONE, true, 160);
   const text = vis(line);
   assert.ok(text.startsWith("└─ ✓ scout"), text);
-  assert.ok(text.includes("avg 52.5 tok/s"), text);
+  assert.ok(text.includes("wall avg 52.5 tok/s"), text);
+  assert.ok(
+    !text.includes("  avg 52.5"),
+    `the terminal label names the wall-clock average, never a bare avg: ${text}`,
+  );
   assert.ok(text.includes("· 4.2k tok"), text);
   assert.ok(text.includes("(claude-3-5-haiku)"), "the model stays dimmed");
   for (const absent of ["█", TRACK_16, "complete", "waiting", "tool:"]) {
@@ -808,12 +812,12 @@ test("a completed worker row shows ✓, the average rate and tokens, and no gaug
   }
 });
 
-test("a completed worker row drops the gauge at every breakpoint and keeps avg + tokens", () => {
+test("a completed worker row drops the gauge at every breakpoint and keeps wall avg + tokens", () => {
   for (const cols of [60, 80, 120, 160]) {
     const line = renderSubagentRow(DONE, false, cols);
     const text = vis(line);
     assert.ok(text.startsWith("├─ ✓ scout"), text);
-    assert.ok(text.includes("avg 52.5 tok/s"), `avg missing at ${cols}`);
+    assert.ok(text.includes("wall avg 52.5 tok/s"), `wall avg missing at ${cols}`);
     assert.ok(text.includes("4.2k tok"), `tokens missing at ${cols}`);
     assert.ok(
       !line.includes("█") && !text.includes(TRACK_16),
@@ -833,16 +837,20 @@ test("a completed row without a correlated average falls back to the last live r
   );
   assert.ok(text.startsWith("└─ ✓ subagent"), text);
   assert.ok(text.includes("avg 12.5 tok/s") && text.includes("300 tok"), text);
+  assert.ok(
+    !text.includes("wall avg"),
+    "no wall-clock claim without an observed average",
+  );
 });
 
-test("a completed main row hides the gauge and shows the average plus session tokens", () => {
+test("a completed main row hides the gauge and shows the wall average plus session tokens", () => {
   const line = renderMainRow(
     { ...MAIN, phase: "complete", avgTps: 51, totalTokens: 12345 },
     160,
   );
   const text = vis(line);
   assert.ok(text.startsWith("✓ Main"), text);
-  assert.ok(text.includes("avg 51.0 tok/s"), text);
+  assert.ok(text.includes("wall avg 51.0 tok/s"), text);
   assert.ok(text.includes("· 12.3k tok"), text);
   assert.ok(text.includes("(claude-3-7-sonnet)"), "the model stays dimmed");
   for (const absent of ["█", TRACK_16, "complete"]) {

@@ -452,3 +452,45 @@ test("thinking deltas count toward the character estimate", () => {
     Math.ceil(13 / CHAR_ESTIMATE_DIVISOR),
   );
 });
+
+// ---------------------------------------------------------------------------
+// RED (T1): a completed tracker reopens for a new run in the same worker
+// session without losing its cumulative worker-session metrics.
+// ---------------------------------------------------------------------------
+
+test("resume() clears the completion stamp and keeps cumulative session metrics", () => {
+  const t = makeTracker();
+
+  t.tracker.handle(msgStart());
+  t.advance(1000);
+  t.tracker.handle(textDelta("abcdefgh")); // 8 chars -> 2 tokens
+  t.advance(1000);
+  t.tracker.handle(msgEnd(10));
+  t.tracker.complete();
+
+  const completed = t.tracker.snapshot();
+  assert.equal(completed.phase, "complete");
+  assert.ok(completed.completedAt !== undefined);
+  assert.equal(completed.totalTokens, 10);
+
+  // A retry or continuation starts another run inside the same worker session.
+  t.advance(500);
+  t.tracker.resume();
+
+  const resumed = t.tracker.snapshot();
+  assert.equal(resumed.phase, "waiting", "a resumed worker waits for activity");
+  assert.equal("completedAt" in resumed, false, "no completion stamp survives");
+  assert.equal(resumed.totalTokens, 10, "cumulative session tokens are kept");
+  assert.equal(resumed.startTime, 0, "the worker session start time is kept");
+  assert.deepEqual(
+    t.tracker.sessionStats().sparkline,
+    [10],
+    "completed-turn history is kept",
+  );
+
+  // Resuming is only meaningful for a completed tracker: live state is untouched.
+  t.tracker.handle(msgStart());
+  assert.equal(t.tracker.snapshot().phase, "streaming");
+  t.tracker.resume();
+  assert.equal(t.tracker.snapshot().phase, "streaming");
+});
