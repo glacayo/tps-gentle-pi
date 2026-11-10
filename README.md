@@ -69,6 +69,7 @@ derive only from the tracker and the live rows — nothing is fabricated.
 | Roles | `session_start` selects `parent-tui` (TUI + no child marker), `gentle-worker` (child marker + inherited channel), or `headless-noop`. |
 | Subagent channel | The parent creates one private, unpredictable session directory; each worker publishes a throttled, atomic, schema-validated snapshot. The parent aggregates only live snapshots. |
 | Identity | The row name is the raw correlated agent name (`agent`), shown only when exactly one worker and one active task match. Otherwise the row uses an honest fallback (`subagent` / `subagent · <pid>`) and never guesses. Task titles are never rendered. |
+| Completion | `agent_end` marks the worker complete and writes its terminal row synchronously, which legacy hosts never follow with more events. A later `agent_start` or assistant turn reopens the same worker row with a fresh publisher and no completion stamp, so retries and continuations stay live. `agent_settled` is consumed as the definitive close when the host actually emits it; a host that never does keeps the `agent_end` behavior. Late tool-only transitions never reopen a completed row, and cumulative session tokens carry across runs. |
 
 ## Installation and child visibility
 

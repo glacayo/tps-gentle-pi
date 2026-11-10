@@ -618,6 +618,256 @@ test("process exit after graceful completion keeps the completed snapshot", asyn
 });
 
 // ---------------------------------------------------------------------------
+// RED (T1): worker completion and reactivation across the current lifecycle.
+//
+// A modern host treats `agent_end` as a per-run boundary (a retry or queued
+// continuation starts another run) and `agent_settled` as the definitive end;
+// a legacy host emits only `agent_end`. Registering an `agent_settled` handler
+// is not capability evidence, so the wiring must react to an observed settled
+// event and never assume one will arrive.
+// ---------------------------------------------------------------------------
+
+/** Worker harness with a controlled clock so resume stamps are deterministic. */
+function workerHarness(t: { after: (fn: () => void) => void }) {
+  const tmpDir = mkTmp(t);
+  const channelDir = fs.mkdtempSync(path.join(tmpDir, "channel-"));
+  setEnv(t, { GENTLE_PI_AGENTS_CHILD: "1", PI_TPS_DIR: channelDir });
+  const pi = makePi();
+  const { ctx, calls } = makeCtx("rpc", true);
+  const snapshotFile = path.join(channelDir, `worker-${process.pid}.json`);
+
+  let clockMs = 1_000_000;
+  const clock = (): number => clockMs;
+  wireSession(pi, { ...fakeTimers(), now: clock });
+
+  return {
+    pi,
+    ctx,
+    calls,
+    channelDir,
+    snapshotFile,
+    advance(ms: number): void {
+      clockMs += ms;
+    },
+    read(): Record<string, unknown> {
+      return JSON.parse(fs.readFileSync(snapshotFile, "utf8")) as Record<
+        string,
+        unknown
+      >;
+    },
+  };
+}
+
+test("legacy agent_end stays terminal when the host never emits agent_settled", async (t) => {
+  const h = workerHarness(t);
+  await triggerSessionStart(h.pi, h.ctx);
+
+  // The handler is accepted, but acceptance alone completes nothing: only an
+  // observed settled event may act.
+  assert.equal(
+    (h.pi.handlers.get("agent_settled") ?? []).length,
+    1,
+    "one agent_settled handler is registered",
+  );
+  await emit(
+    h.pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "bash" },
+    h.ctx,
+  );
+  assert.equal("completedAt" in h.read(), false, "a live row is not completed");
+
+  h.advance(10);
+  await emit(h.pi, "agent_end", { type: "agent_end" }, h.ctx);
+
+  const terminal = h.read();
+  assert.equal(terminal.phase, "complete");
+  assert.equal(terminal.completedAt, 1_000_010);
+
+  // No settled event ever arrives: the terminal row is retained as before.
+  const retained = readWorkerSnapshots(h.channelDir, { now: () => 1_000_020 });
+  assert.equal(retained.length, 1, "legacy terminal row stays visible");
+  assert.equal(retained[0].phase, "complete");
+});
+
+test("agent_end then a retry's agent_start resumes the worker and the next agent_end is terminal", async (t) => {
+  const h = workerHarness(t);
+  await triggerSessionStart(h.pi, h.ctx);
+
+  // First run: one completed turn worth 5 output tokens.
+  await emit(
+    h.pi,
+    "message_start",
+    { type: "message_start", message: { role: "assistant" } },
+    h.ctx,
+  );
+  h.advance(1_000);
+  await emit(
+    h.pi,
+    "message_update",
+    {
+      type: "message_update",
+      message: { role: "assistant", usage: { output: 5 } },
+    },
+    h.ctx,
+  );
+  h.advance(1_000);
+  await emit(
+    h.pi,
+    "message_end",
+    { type: "message_end", message: { role: "assistant", usage: { output: 5 } } },
+    h.ctx,
+  );
+  h.advance(10);
+  await emit(h.pi, "agent_end", { type: "agent_end" }, h.ctx);
+
+  const firstTerminal = h.read();
+  assert.equal(firstTerminal.phase, "complete");
+  assert.equal(firstTerminal.completedAt, 1_002_010);
+  assert.equal(firstTerminal.totalTokens, 5);
+
+  // The host retries in the same worker session: the run reopens as live.
+  h.advance(500);
+  await emit(h.pi, "agent_start", { type: "agent_start" }, h.ctx);
+
+  const resumed = h.read();
+  assert.equal(resumed.phase, "waiting", "the resumed row waits for activity");
+  assert.equal("completedAt" in resumed, false, "the stamp was cleared");
+  assert.equal(resumed.totalTokens, 5, "cumulative session tokens are kept");
+  assert.equal(resumed.updatedAt, 1_002_510, "the resumed row is republished");
+
+  // Continuation activity streams again, then the final agent_end is terminal.
+  await emit(
+    h.pi,
+    "message_start",
+    { type: "message_start", message: { role: "assistant" } },
+    h.ctx,
+  );
+  h.advance(1_000);
+  await emit(
+    h.pi,
+    "message_update",
+    {
+      type: "message_update",
+      message: { role: "assistant", usage: { output: 7 } },
+    },
+    h.ctx,
+  );
+  h.advance(1_000);
+  await emit(
+    h.pi,
+    "message_end",
+    { type: "message_end", message: { role: "assistant", usage: { output: 7 } } },
+    h.ctx,
+  );
+  h.advance(10);
+  await emit(h.pi, "agent_end", { type: "agent_end" }, h.ctx);
+
+  const finalTerminal = h.read();
+  assert.equal(finalTerminal.phase, "complete");
+  assert.equal(finalTerminal.completedAt, 1_004_520);
+  assert.equal(finalTerminal.totalTokens, 12, "session totals accumulate");
+
+  // The definitive settled event consumes an already-finalized run as a no-op.
+  h.advance(25);
+  await emit(h.pi, "agent_settled", { type: "agent_settled", aborted: false }, h.ctx);
+  assert.deepEqual(h.read(), finalTerminal, "settled keeps the terminal row");
+
+  // RPC workers never touch the UI across the whole lifecycle.
+  assert.deepEqual(h.calls.setWidget, []);
+  assert.deepEqual(h.calls.notify, []);
+  assert.deepEqual(h.calls.setStatus, []);
+});
+
+test("assistant message activity alone reopens a completed worker", async (t) => {
+  const h = workerHarness(t);
+  await triggerSessionStart(h.pi, h.ctx);
+  await emit(h.pi, "agent_end", { type: "agent_end" }, h.ctx);
+  assert.equal(h.read().phase, "complete");
+
+  // No agent_start in this stream: the assistant turn is the same evidence.
+  h.advance(200);
+  await emit(
+    h.pi,
+    "message_start",
+    { type: "message_start", message: { role: "assistant" } },
+    h.ctx,
+  );
+
+  const resumed = h.read();
+  assert.equal(resumed.phase, "streaming");
+  assert.equal("completedAt" in resumed, false, "the stamp was cleared");
+});
+
+test("late tool-only lifecycle events never reopen or erase the terminal row", async (t) => {
+  const h = workerHarness(t);
+  await triggerSessionStart(h.pi, h.ctx);
+  h.advance(10);
+  await emit(h.pi, "agent_end", { type: "agent_end" }, h.ctx);
+  const terminal = h.read();
+  assert.equal(terminal.phase, "complete");
+
+  h.advance(500);
+  const late = [
+    { type: "tool_execution_start", toolName: "bash" },
+    { type: "tool_execution_end" },
+    { type: "message_start", message: { role: "user" } },
+    { type: "message_end", message: { role: "user" } },
+    { type: "agent_end" },
+    { type: "agent_settled", aborted: false },
+  ];
+  for (const event of late) await emit(h.pi, event.type, event, h.ctx);
+
+  assert.deepEqual(
+    h.read(),
+    terminal,
+    "the terminal row survives every late transition",
+  );
+  assert.equal(
+    readWorkerSnapshots(h.channelDir, { now: () => 1_000_510 }).length,
+    1,
+    "the terminal row is still retained",
+  );
+});
+
+test("agent_settled finalizes a live worker whose host emitted no agent_end", async (t) => {
+  const h = workerHarness(t);
+  await triggerSessionStart(h.pi, h.ctx);
+  await emit(
+    h.pi,
+    "tool_execution_start",
+    { type: "tool_execution_start", toolName: "read" },
+    h.ctx,
+  );
+  assert.equal("completedAt" in h.read(), false, "the run is live");
+
+  h.advance(25);
+  await emit(h.pi, "agent_settled", { type: "agent_settled", aborted: false }, h.ctx);
+
+  const terminal = h.read();
+  assert.equal(terminal.phase, "complete");
+  assert.equal(terminal.completedAt, 1_000_025);
+  assert.equal("activeTool" in terminal, false, "no active tool on completion");
+});
+
+test("session_shutdown after a reactivation unlinks the resumed live row", async (t) => {
+  const h = workerHarness(t);
+  await triggerSessionStart(h.pi, h.ctx);
+  await emit(h.pi, "agent_end", { type: "agent_end" }, h.ctx);
+
+  h.advance(100);
+  await emit(h.pi, "agent_start", { type: "agent_start" }, h.ctx);
+  assert.ok(fs.existsSync(h.snapshotFile), "the resumed live row exists");
+
+  await emit(h.pi, "session_shutdown", { reason: "quit" }, h.ctx);
+  assert.equal(
+    fs.existsSync(h.snapshotFile),
+    false,
+    "an unexpected shutdown unlinks the live resumed row",
+  );
+});
+
+// ---------------------------------------------------------------------------
 // RED (task 8.1): headless role is a silent no-op.
 // ---------------------------------------------------------------------------
 
